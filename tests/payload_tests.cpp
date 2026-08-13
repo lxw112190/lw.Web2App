@@ -15,8 +15,8 @@ void Check(bool condition, const char* message) {
 }
 
 void RunPayloadTests() {
-  const auto log_file = std::filesystem::temp_directory_path() / L"lwweb-logging-test" /
-                        L"app.log";
+  const auto log_file = std::filesystem::temp_directory_path() / "lwweb-logging-test" /
+                        "app.log";
   auto logger = lwweb::Logger::Rotating("lwweb-test", log_file, {});
   logger.Info("logging smoke test");
   logger.Flush();
@@ -38,22 +38,22 @@ void RunPayloadTests() {
   Check(output.manifest_size == input.manifest_size, "manifest size round-trip");
   Check(output.sha256 == input.sha256, "digest round-trip");
 
-  const auto base = std::filesystem::temp_directory_path() / L"lwweb-integration-test";
+  const auto base = std::filesystem::temp_directory_path() / "lwweb-integration-test";
   std::error_code ignored;
   std::filesystem::remove_all(base, ignored);
-  std::filesystem::create_directories(base / L"site" / L"assets");
+  std::filesystem::create_directories(base / "site" / "assets");
   {
-    std::ofstream runner(base / L"runner.exe", std::ios::binary);
+    std::ofstream runner(base / "runner.exe", std::ios::binary);
     runner << "MZ fake runner prefix";
-    std::ofstream html(base / L"site" / L"index.html", std::ios::binary);
+    std::ofstream html(base / "site" / "index.html", std::ios::binary);
     html << "<!doctype html><title>test</title>";
-    std::ofstream css(base / L"site" / L"assets" / L"app.css", std::ios::binary);
+    std::ofstream css(base / "site" / "assets" / "app.css", std::ios::binary);
     css << "body{color:red}";
   }
   lwweb::PackOptions pack;
-  pack.runner = base / L"runner.exe";
-  pack.source_directory = base / L"site";
-  pack.output = base / L"packed.exe";
+  pack.runner = base / "runner.exe";
+  pack.source_directory = base / "site";
+  pack.output = base / "packed.exe";
   pack.manifest.title = "Integration Test";
   lwweb::PackApplication(pack);
   const auto loaded = lwweb::LoadPayload(pack.output);

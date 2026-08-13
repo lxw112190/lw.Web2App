@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=lw.Web2App
+Name[zh_CN]=lw.Web2App 网页应用打包器
+Comment=Package static websites as native desktop applications
+Comment[zh_CN]=将静态网站打包为原生桌面应用
+Exec=lw.Web2App
+Icon=lw.Web2App
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

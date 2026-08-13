@@ -157,7 +157,8 @@ std::filesystem::path PickFile(HWND owner, const wchar_t* title,
 
 std::wstring LocalizeProgress(const std::string& message) {
   if (message == "Copying runner") return L"正在准备通用运行器…";
-  if (message == "Writing PE metadata") return L"正在写入图标和版本信息…";
+  if (message == "Writing PE metadata" || message == "Writing platform metadata")
+    return L"正在写入图标和版本信息…";
   if (message == "Compressing static resources") return L"正在压缩网页资源…";
   if (message == "Appending payload and SHA-256") return L"正在写入 Payload 并计算 SHA-256…";
   if (message == "Done") return L"生成完成，可以运行目标 EXE。";

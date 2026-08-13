@@ -6,7 +6,9 @@
 #include "lwweb/common/path_utils.h"
 #include "lwweb/common/sha256.h"
 #include "lwweb/packer/payload.h"
+#ifdef _WIN32
 #include "lwweb/pe/pe_resources.h"
+#endif
 
 #include <miniz.h>
 
@@ -48,7 +50,7 @@ struct ZipBuildResult {
 
 ZipBuildResult BuildZip(const PackOptions& options) {
   auto temporary = options.output;
-  temporary += L".payload.tmp";
+  temporary += ".payload.tmp";
   std::error_code ignored;
   std::filesystem::remove(temporary, ignored);
   std::ofstream archive(temporary, std::ios::binary | std::ios::trunc);
@@ -86,8 +88,8 @@ ZipBuildResult BuildZip(const PackOptions& options) {
     if (size > options.limits.max_file_size) throw Error("A source file exceeds the safety limit");
     if (size > options.limits.max_total_size - total) throw Error("Source exceeds the total size limit");
     total += size;
-    const auto relative = WideToUtf8(
-        std::filesystem::relative(item.path(), source).generic_wstring());
+    const auto relative =
+        std::filesystem::relative(item.path(), source).generic_u8string();
     const auto normalized = NormalizeArchivePath(relative);
     if (!normalized) throw Error("Source contains an unsafe relative path");
     std::ifstream source_file(item.path(), std::ios::binary);
@@ -164,13 +166,13 @@ void PackApplication(const PackOptions& options) {
   log.Info("Entry: " + (manifest.mode == AppMode::Local ? manifest.entry : manifest.url));
   log.Info("SPA fallback: " + std::string(manifest.spa_fallback ? "true" : "false"));
   if (manifest.mode == AppMode::Local)
-    log.Info("Source: " + WideToUtf8(options.source_directory.wstring()));
+    log.Info("Source: " + options.source_directory.u8string());
   if (options.runner.empty() || options.output.empty())
     throw Error("Runner and output paths are required");
-  if (options.manifest.mode == AppMode::Local) {
+  if (manifest.mode == AppMode::Local) {
     if (!std::filesystem::is_directory(options.source_directory))
       throw Error("Local mode requires a source directory");
-    const auto entry = options.source_directory / Utf8ToWide(options.manifest.entry);
+    const auto entry = options.source_directory / std::filesystem::u8path(manifest.entry);
     if (!std::filesystem::is_regular_file(entry)) throw Error("Entry HTML file does not exist");
   }
   if (!options.output.parent_path().empty())
@@ -178,12 +180,22 @@ void PackApplication(const PackOptions& options) {
   phase = "runner copy";
   Progress(options, "Copying runner");
   CopyRunnerPrefix(options.runner, options.output);
-    phase = "PE resource update";
-    Progress(options, "Writing PE metadata");
+    phase = "platform metadata update";
+    Progress(options, "Writing platform metadata");
+#ifdef _WIN32
     UpdatePeResources(options.output, options.metadata);
     log.Info("PE version metadata updated successfully");
     log.Info(options.metadata.icon.empty() ? "PE icon: default icon retained"
                                           : "PE icon updated successfully");
+#else
+    std::filesystem::permissions(
+        options.output,
+        std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
+            std::filesystem::perms::others_exec,
+        std::filesystem::perm_options::add, error);
+    if (error) throw Error("Cannot make the generated Linux application executable");
+    log.Info("Linux executable permissions updated successfully");
+#endif
     ZipBuildResult zip;
     std::uint32_t flags = 0;
     if (options.manifest.mode == AppMode::Local) {
@@ -202,7 +214,7 @@ void PackApplication(const PackOptions& options) {
     AppendPayload(options.output, zip.path, manifest, flags);
     const auto loaded = LoadPayload(options.output);
     log.Info("Payload SHA-256: " + HexDigest(loaded.footer.sha256));
-    log.Info("Output: " + WideToUtf8(options.output.wstring()));
+    log.Info("Output: " + options.output.u8string());
     if (!zip.path.empty()) std::filesystem::remove(zip.path, error);
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started);
@@ -221,7 +233,7 @@ void PackApplication(const PackOptions& options) {
     }
     std::filesystem::remove(options.output, error);
     auto temporary = options.output;
-    temporary += L".payload.tmp";
+    temporary += ".payload.tmp";
     std::filesystem::remove(temporary, error);
     throw;
   }

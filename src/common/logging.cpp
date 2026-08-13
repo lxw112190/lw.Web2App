@@ -4,7 +4,13 @@
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/sha256.h"
 
+#ifdef _WIN32
 #include <ShlObj.h>
+#include <Windows.h>
+#else
+#include <unistd.h>
+#include <cstdlib>
+#endif
 #include <spdlog/sinks/rotating_file_sink.h>
 #include <spdlog/spdlog.h>
 
@@ -26,6 +32,7 @@ spdlog::level::level_enum ParseLevel(const std::string& level) {
 }  // namespace
 
 std::filesystem::path LocalAppDataRoot() {
+#ifdef _WIN32
   PWSTR local_app_data = nullptr;
   if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_CREATE, nullptr,
                                   &local_app_data)))
@@ -33,6 +40,13 @@ std::filesystem::path LocalAppDataRoot() {
   const std::filesystem::path root(local_app_data);
   CoTaskMemFree(local_app_data);
   return root / L"lw.Web2App";
+#else
+  if (const char* state = std::getenv("XDG_STATE_HOME"); state && *state)
+    return std::filesystem::path(state) / "lw.Web2App";
+  const char* home = std::getenv("HOME");
+  if (!home || !*home) throw Error("HOME is not set; cannot locate the state directory");
+  return std::filesystem::path(home) / ".local" / "state" / "lw.Web2App";
+#endif
 }
 
 std::string EffectiveAppId(const Manifest& manifest) {
@@ -55,10 +69,21 @@ Logger Logger::Rotating(const std::string& name, const std::filesystem::path& fi
   std::filesystem::create_directories(file.parent_path(), error);
   if (error) throw lwweb::Error("Cannot create the log directory");
   try {
-    const auto unique_name = name + "-" + std::to_string(GetCurrentProcessId()) + "-" +
+    const auto process_id =
+#ifdef _WIN32
+        GetCurrentProcessId();
+#else
+        getpid();
+#endif
+    const auto unique_name = name + "-" + std::to_string(process_id) + "-" +
                              std::to_string(++sequence);
+#ifdef _WIN32
     auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
         file.wstring(), static_cast<std::size_t>(config.max_file_size), config.max_files);
+#else
+    auto sink = std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+        file.string(), static_cast<std::size_t>(config.max_file_size), config.max_files);
+#endif
     auto logger = std::make_shared<spdlog::logger>(unique_name, sink);
     logger->set_pattern("%Y-%m-%d %H:%M:%S.%e [%^%l%$] [%n] %v");
     logger->set_level(ParseLevel(config.level));
@@ -72,14 +97,14 @@ Logger Logger::Rotating(const std::string& name, const std::filesystem::path& fi
 }
 
 Logger Logger::Packer(const LoggingConfig& config) {
-  return Rotating("lw.Web2App.Packer", LocalAppDataRoot() / L"logs" / L"packer.log",
+  return Rotating("lw.Web2App.Packer", LocalAppDataRoot() / "logs" / "packer.log",
                   config);
 }
 
 Logger Logger::Runtime(const Manifest& manifest) {
   return Rotating("lw.WebRuntime",
-                  LocalAppDataRoot() / L"apps" / Utf8ToWide(EffectiveAppId(manifest)) /
-                      L"logs" / L"app.log",
+                  LocalAppDataRoot() / "apps" / EffectiveAppId(manifest) /
+                      "logs" / "app.log",
                   manifest.logging);
 }
 

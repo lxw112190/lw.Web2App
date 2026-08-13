@@ -1,4 +1,4 @@
-name: Windows x64
+name: Windows and Linux x64
 
 on:
   push:
@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    name: Build, test and package
+  windows:
+    name: Windows 2022 - build, test and package
     runs-on: windows-2022
 
     steps:
@@ -118,10 +118,118 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  linux:
+    name: Ubuntu ${{ matrix.ubuntu }} - build, test and package
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ["22.04", "24.04"]
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v6
+
+      - name: Checkout integration test project
+        uses: actions/checkout@v6
+        with:
+          repository: lxw112190/wechat-article-formatter
+          ref: main
+          path: integration/wechat-article-formatter
+
+      - name: Set up Node.js for integration test
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: integration/wechat-article-formatter/package-lock.json
+
+      - name: Install Ubuntu build and runtime dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build pkg-config dpkg-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+            libssl-dev xvfb xauth
+
+      - name: Configure Release x64
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build integration test project
+        working-directory: integration/wechat-article-formatter
+        run: |
+          npm ci
+          npm run build
+
+      - name: Package, inspect and launch integration test application
+        run: |
+          set -euo pipefail
+          mkdir -p dist/lw.Web2App/examples smoke-home
+          ./build/lw.Web2App pack integration/wechat-article-formatter/dist \
+            dist/lw.Web2App/examples/wechat-article-formatter \
+            --title "公众号排版助手" --width 1440 --height 900
+          test -x dist/lw.Web2App/examples/wechat-article-formatter
+          ./build/lw.Web2App inspect \
+            dist/lw.Web2App/examples/wechat-article-formatter \
+            > dist/lw.Web2App/examples/wechat-article-formatter-manifest.json
+          set +e
+          HOME="$PWD/smoke-home" WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+            timeout 15s xvfb-run -a \
+            dist/lw.Web2App/examples/wechat-article-formatter
+          smoke_exit=$?
+          set -e
+          if [ "$smoke_exit" -ne 0 ] && [ "$smoke_exit" -ne 124 ]; then
+            echo "Linux Runtime smoke test failed with exit code $smoke_exit"
+            find smoke-home -type f -name '*.log' -print -exec tail -n 100 {} \;
+            exit "$smoke_exit"
+          fi
+          runtime_log=$(find smoke-home -type f -path '*/logs/app.log' -print -quit)
+          test -n "$runtime_log"
+          grep -q "WebKitGTK initialized" "$runtime_log"
+          grep -q "Navigation completed" "$runtime_log"
+          cp integration/wechat-article-formatter/LICENSE \
+            dist/lw.Web2App/examples/wechat-article-formatter-LICENSE.txt
+
+      - name: Prepare Linux distributions
+        run: |
+          set -euo pipefail
+          mkdir -p dist/lw.Web2App/docs/assets dist/lw.Web2App/third_party/licenses
+          cp build/lw.Web2App dist/lw.Web2App/
+          cp README.md README_EN.md LICENSE THIRD_PARTY_NOTICES.md dist/lw.Web2App/
+          cp docs/assets/sponsor.jpg docs/assets/lw.Web2App.png dist/lw.Web2App/docs/assets/
+          cp third_party/licenses/* dist/lw.Web2App/third_party/licenses/
+          cpack --config build/CPackConfig.cmake -G DEB -B dist/packages
+          cpack --config build/CPackConfig.cmake -G TGZ -B dist/packages
+          tar -C dist -czf \
+            "dist/lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}.tar.gz" lw.Web2App
+          sha256sum \
+            "dist/lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}.tar.gz" \
+            dist/packages/* \
+            dist/lw.Web2App/lw.Web2App \
+            dist/lw.Web2App/examples/wechat-article-formatter \
+            > "dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt"
+
+      - name: Upload downloadable artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}
+          path: |
+            dist/lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}.tar.gz
+            dist/packages/*.deb
+            dist/packages/*.tar.gz
+            dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt
+          if-no-files-found: error
+          retention-days: 30
+
   release:
     name: Publish tagged release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [windows, linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -130,7 +238,7 @@ jobs:
       - name: Download tested release assets
         uses: actions/download-artifact@v8
         with:
-          name: lw.Web2App-windows-x64
+          pattern: lw.Web2App-*
           path: dist
 
       - name: Publish GitHub Release assets
@@ -138,5 +246,7 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            dist/lw.Web2App-windows-x64.zip
-            dist/lw.Web2App/SHA256SUMS.txt
+            dist/**/*.zip
+            dist/**/*.tar.gz
+            dist/**/*.deb
+            dist/**/SHA256SUMS*.txt

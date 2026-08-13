@@ -15,6 +15,10 @@ lw.Web2App uses the following dependencies when built from source:
 - spdlog, copyright Gabi Melman and contributors. The bundled spdlog release
   includes its bundled fmt dependency. See
   [`third_party/licenses/spdlog-LICENSE.txt`](third_party/licenses/spdlog-LICENSE.txt).
+- Linux builds dynamically use GTK 3, WebKitGTK 4.1, GLib, and OpenSSL as
+  system libraries supplied by Ubuntu. These libraries are not copied into the
+  lw.Web2App DEB or portable archive; their licenses and source packages are
+  provided by the Ubuntu repositories.
 
 The corresponding license and notice files are included in source checkouts
 and binary distribution archives.

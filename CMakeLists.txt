@@ -2,19 +2,16 @@ cmake_minimum_required(VERSION 3.24)
 
 project(lw.Web2App VERSION 0.1.0 LANGUAGES C CXX)
 
-if(NOT WIN32)
-  message(FATAL_ERROR
-    "lw.Web2App currently supports Windows 10/11 only; Linux support is planned")
-endif()
-
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
-  message(FATAL_ERROR "lw.Web2App v1 supports x64 builds only")
+  message(FATAL_ERROR "lw.Web2App currently supports x64 builds only")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+if(MSVC)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 include(FetchContent)
 
@@ -67,27 +64,30 @@ set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
 set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
-set(SPDLOG_WCHAR_FILENAMES ON CACHE BOOL "" FORCE)
+if(WIN32)
+  set(SPDLOG_WCHAR_FILENAMES ON CACHE BOOL "" FORCE)
+endif()
 FetchContent_MakeAvailable(spdlog)
 
-set(WEBVIEW2_VERSION "1.0.4078.44" CACHE STRING "WebView2 SDK version")
-if(EXISTS "${LWWEB_DEPS_CACHE}/webview2.zip")
-  set(LWWEB_WEBVIEW2_URL "${LWWEB_DEPS_CACHE}/webview2.zip")
-else()
-  set(LWWEB_WEBVIEW2_URL "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${WEBVIEW2_VERSION}")
-endif()
-FetchContent_Declare(webview2_sdk
-  URL "${LWWEB_WEBVIEW2_URL}"
-  DOWNLOAD_NAME webview2.zip
-  URL_HASH SHA256=dc4d1d9168df26b830398303e50210b6e1729f6ce5a7ac69d2c766852f489962
-  SOURCE_SUBDIR _lwweb_no_cmakelists)
-FetchContent_MakeAvailable(webview2_sdk)
-
-set(WEBVIEW2_ROOT "${webview2_sdk_SOURCE_DIR}")
-set(WEBVIEW2_INCLUDE "${WEBVIEW2_ROOT}/build/native/include")
-set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2LoaderStatic.lib")
-if(NOT EXISTS "${WEBVIEW2_INCLUDE}/WebView2.h" OR NOT EXISTS "${WEBVIEW2_LOADER}")
-  message(FATAL_ERROR "Unexpected WebView2 NuGet package layout at ${WEBVIEW2_ROOT}")
+if(WIN32)
+  set(WEBVIEW2_VERSION "1.0.4078.44" CACHE STRING "WebView2 SDK version")
+  if(EXISTS "${LWWEB_DEPS_CACHE}/webview2.zip")
+    set(LWWEB_WEBVIEW2_URL "${LWWEB_DEPS_CACHE}/webview2.zip")
+  else()
+    set(LWWEB_WEBVIEW2_URL "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/${WEBVIEW2_VERSION}")
+  endif()
+  FetchContent_Declare(webview2_sdk
+    URL "${LWWEB_WEBVIEW2_URL}"
+    DOWNLOAD_NAME webview2.zip
+    URL_HASH SHA256=dc4d1d9168df26b830398303e50210b6e1729f6ce5a7ac69d2c766852f489962
+    SOURCE_SUBDIR _lwweb_no_cmakelists)
+  FetchContent_MakeAvailable(webview2_sdk)
+  set(WEBVIEW2_ROOT "${webview2_sdk_SOURCE_DIR}")
+  set(WEBVIEW2_INCLUDE "${WEBVIEW2_ROOT}/build/native/include")
+  set(WEBVIEW2_LOADER "${WEBVIEW2_ROOT}/build/native/x64/WebView2LoaderStatic.lib")
+  if(NOT EXISTS "${WEBVIEW2_INCLUDE}/WebView2.h" OR NOT EXISTS "${WEBVIEW2_LOADER}")
+    message(FATAL_ERROR "Unexpected WebView2 NuGet package layout at ${WEBVIEW2_ROOT}")
+  endif()
 endif()
 
 add_library(lwweb_core STATIC
@@ -98,7 +98,6 @@ add_library(lwweb_core STATIC
   src/packer/manifest.cpp
   src/packer/payload.cpp
   src/packer/packer.cpp
-  src/pe/pe_resources.cpp
   src/runtime/resource_cache.cpp
   src/runtime/resource_server.cpp)
 target_include_directories(lwweb_core PUBLIC include PRIVATE ${miniz_SOURCE_DIR})
@@ -106,36 +105,63 @@ target_link_libraries(lwweb_core PUBLIC
   nlohmann_json::nlohmann_json
   httplib::httplib
   miniz
-  spdlog::spdlog
-  bcrypt
-  ws2_32
-  version)
-target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
-  SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)
-target_compile_options(lwweb_core PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  spdlog::spdlog)
 
-add_executable(lwweb WIN32
-  src/app/main.cpp
-  src/app/main_window.cpp
-  src/webview/webview_host.cpp
-  resources/lwweb.rc)
-target_include_directories(lwweb PRIVATE include ${WEBVIEW2_INCLUDE})
-target_link_libraries(lwweb PRIVATE
-  lwweb_core
-  "${WEBVIEW2_LOADER}"
-  comctl32
-  comdlg32
-  dwmapi
-  ole32
-  shell32
-  shlwapi
-  uxtheme
-  windowscodecs
-  user32
-  gdi32)
-target_compile_definitions(lwweb PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE _WIN32_WINNT=0x0A00)
-target_compile_options(lwweb PRIVATE /W4 /permissive- /utf-8 /EHsc)
+if(WIN32)
+  target_sources(lwweb_core PRIVATE src/pe/pe_resources.cpp)
+  target_link_libraries(lwweb_core PUBLIC bcrypt ws2_32 version shell32)
+  target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+    SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)
+  add_executable(lwweb WIN32
+    src/app/main.cpp src/app/main_window.cpp src/webview/webview_host.cpp resources/lwweb.rc)
+  target_include_directories(lwweb PRIVATE include ${WEBVIEW2_INCLUDE})
+  target_link_libraries(lwweb PRIVATE lwweb_core "${WEBVIEW2_LOADER}" comctl32 comdlg32
+    dwmapi ole32 shell32 shlwapi uxtheme windowscodecs user32 gdi32)
+  target_compile_definitions(lwweb PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX UNICODE _UNICODE
+    _WIN32_WINNT=0x0A00)
+elseif(UNIX AND NOT APPLE)
+  find_package(PkgConfig REQUIRED)
+  find_package(OpenSSL REQUIRED)
+  find_package(Threads REQUIRED)
+  pkg_check_modules(GTK3 REQUIRED IMPORTED_TARGET gtk+-3.0)
+  pkg_check_modules(WEBKIT REQUIRED IMPORTED_TARGET webkit2gtk-4.1)
+  target_link_libraries(lwweb_core PUBLIC OpenSSL::Crypto Threads::Threads)
+  add_executable(lwweb src/linux/main.cpp)
+  target_include_directories(lwweb PRIVATE include)
+  target_link_libraries(lwweb PRIVATE lwweb_core PkgConfig::GTK3 PkgConfig::WEBKIT)
+else()
+  message(FATAL_ERROR "lw.Web2App supports Windows and Ubuntu Linux only")
+endif()
+
+if(MSVC)
+  target_compile_options(lwweb_core PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  target_compile_options(lwweb PRIVATE /W4 /permissive- /utf-8 /EHsc)
+else()
+  target_compile_options(lwweb_core PRIVATE -Wall -Wextra -Wpedantic)
+  target_compile_options(lwweb PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 set_target_properties(lwweb PROPERTIES OUTPUT_NAME "lw.Web2App")
+
+install(TARGETS lwweb RUNTIME DESTINATION bin)
+if(UNIX AND NOT APPLE)
+  install(FILES resources/linux/lw.Web2App.desktop DESTINATION share/applications)
+  install(FILES resources/linux/lw.Web2App.svg DESTINATION share/icons/hicolor/scalable/apps)
+  install(FILES README.md README_EN.md DESTINATION share/doc/lw-web2app)
+
+  set(CPACK_GENERATOR "DEB;TGZ")
+  set(CPACK_PACKAGE_NAME "lw-web2app")
+  set(CPACK_PACKAGE_VENDOR "天天代码码天天")
+  set(CPACK_PACKAGE_CONTACT "QQ 819069052")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "将静态网站打包为 Windows EXE 或 Linux 应用")
+  set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+  set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
+  set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
+  # Let dpkg-shlibdeps resolve Ubuntu-version-specific names (for example t64
+  # transitions) from the actual ELF dependencies on each CI runner.
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+  set(CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+  include(CPack)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -145,7 +171,11 @@ if(BUILD_TESTING)
     tests/path_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)
   target_link_libraries(lwweb_tests PRIVATE lwweb_core)
-  target_compile_definitions(lwweb_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
-  target_compile_options(lwweb_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  if(MSVC)
+    target_compile_definitions(lwweb_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+    target_compile_options(lwweb_tests PRIVATE /W4 /permissive- /utf-8 /EHsc)
+  else()
+    target_compile_options(lwweb_tests PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
   add_test(NAME lwweb_tests COMMAND lwweb_tests)
 endif()

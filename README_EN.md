@@ -2,20 +2,20 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-A lightweight desktop web-application packager. The current release supports Windows x64 and packages HTML, Vue, React, Vite, and other static builds into standalone EXE files without rebuilding the web project.
+A lightweight desktop web-application packager. It supports Windows x64 and now includes an Ubuntu 22.04/24.04 x86_64 Beta, packaging HTML, Vue, React, Vite, and other static builds into single-file desktop applications without rebuilding the web project.
 
-The target computer does not need Node.js, Rust, .NET, Electron, or a compiler toolchain. It only needs the Microsoft WebView2 Evergreen Runtime.
+The target computer does not need Node.js, Rust, .NET, Electron, or a compiler toolchain. Windows uses Microsoft WebView2 Evergreen Runtime; Linux uses the system GTK3 and WebKitGTK 4.1 runtime.
 
-> **Platform status:** the stable implementation currently supports Windows 10/11 x64 only. Linux is the primary next milestone. The plan is to reuse the cross-platform payload, ZIP, manifest, SHA-256, local resource service, and cache core while adding a native Linux window/WebView layer and ELF/AppImage distribution. The current release cannot be built or run on Linux; see the [Cross-Platform Roadmap](#cross-platform-roadmap).
+> **Platform status:** Windows 10/11 x64 is stable. Ubuntu 22.04/24.04 x86_64 is the first Linux Beta, with a GTK3 GUI, CLI, ELF Runner, WebKitGTK Runtime, single-file payload, logs, and CI-built `.deb`/`.tar.gz` packages. Other distributions, ARM64, AppImage, and RPM are not supported yet.
 
 <img src="docs/assets/lw.Web2App.png" alt="lw.Web2App graphical interface on Windows" width="760">
 
 ## Features
 
-- Modern native Win32 graphical interface and a scriptable CLI.
+- Native Win32 + WebView2 on Windows and GTK3 + WebKitGTK 4.1 on Linux, with GUI and CLI on both.
 - Live packaging-stage and result status in the GUI, with an independently repainted status area for clear rapid updates.
-- Package a local HTML, Vue, React, or Vite build directory into one EXE.
-- Package an online `http://` or `https://` URL into one EXE.
+- Package a local HTML, Vue, React, or Vite build into one Windows EXE or Linux ELF application.
+- Package an online `http://` or `https://` URL into a single-file desktop application.
 - WebView2 Evergreen Runtime with the WebView2 Loader statically linked.
 - Independently designed `LWWEB002` V2 payload container with `LWWEB001` V1 read compatibility.
 - Combined SHA-256 verification of the resource ZIP and manifest before embedded content is opened.
@@ -32,15 +32,15 @@ The target computer does not need Node.js, Rust, .NET, Electron, or a compiler t
 
 ## How It Works
 
-lw.Web2App creates a single-file application using a **native Runner plus an end-of-file payload**. It does not translate web source code into C++, nor does it bundle Chromium, Node.js, or Electron into every generated application. Rendering is delegated to the Microsoft WebView2 Runtime installed on Windows.
+lw.Web2App creates a single-file application using a **platform Runner plus an end-of-file payload**. It does not translate web source into C++, nor bundle Chromium, Node.js, or Electron into every generated app. Windows delegates rendering to WebView2 and Linux to WebKitGTK; both share the manifest, ZIP, SHA-256, local HTTP server, path-security, and LRU-cache core.
 
 ### Packaging
 
 1. **Validate the input**: local mode checks that the static directory and entry HTML exist, then enforces limits on file count, individual size, and total size.
-2. **Copy the Runner**: the current `lw.Web2App.exe` supplies the native PE prefix. If an already packaged application is used as the packer, only its original Runner prefix is copied, so old payloads are not nested.
-3. **Update PE resources**: the copy receives the selected icon, product name, description, company, version, and copyright fields shown by Windows Explorer under **Properties → Details**.
+2. **Copy the Runner**: the current `lw.Web2App.exe` or `lw.Web2App` supplies the native PE/ELF prefix. If an already packaged app is used as the packer, only its original Runner prefix is copied, so old payloads are not nested.
+3. **Write platform metadata**: Windows updates PE icons and version fields; Linux adds executable permissions. Per-generated-app desktop files, icons, and DEB metadata are planned separately.
 4. **Build the ZIP**: files are streamed into a temporary ZIP under normalized relative paths, avoiding simultaneous in-memory copies of the source and complete archive. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
-5. **Append the container**: the resource ZIP, Manifest JSON, and a fixed 80-byte footer are streamed onto the PE file. The V2 footer stores the format version, flags, section offsets and lengths, and a combined SHA-256 of the ZIP plus manifest.
+5. **Append the container**: the ZIP, Manifest JSON, and fixed 80-byte footer are streamed onto the PE/ELF file. The V2 footer stores the format, flags, section offsets/lengths, and a combined SHA-256 of ZIP plus manifest.
 
 Online URL mode does not snapshot or embed the remote website. Its ZIP is empty and the manifest records only the target URL and window settings. The generated application therefore requires network access and follows future changes to that website.
 
@@ -51,8 +51,8 @@ Online URL mode does not snapshot or embed the remote website. Its ZIP is empty 
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
 4. A private HTTP service starts on a random `127.0.0.1` port. It validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback when configured.
 5. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
-6. The native window creates a WebView2 Controller and navigates to the private local address or configured online URL. Title, dimensions, resizing, default fullscreen, and developer-tool policy come from the manifest. `F11` toggles fullscreen and `Esc` exits it.
-7. Each app has a stable `app_id`; WebView2 data is stored under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`, so renaming the EXE does not change its storage location.
+6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Both navigate to the private local address or online URL and honor title, dimensions, resizing, fullscreen, and developer-tool settings. `F11` toggles fullscreen and `Esc` exits it.
+7. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
 
 SHA-256 detects resource corruption or modification; it does not authenticate a publisher. Trusted distribution of the manifest and complete EXE still requires a signing mechanism such as Authenticode.
 
@@ -63,6 +63,12 @@ lw.Web2App uses synchronous spdlog rotating-file logging. INFO is the default le
 - Packager: `%LOCALAPPDATA%\lw.Web2App\logs\packer.log`
 - Generated application: `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\logs\app.log`
 - Startup failures before a Manifest/Payload can be loaded: `%LOCALAPPDATA%\lw.Web2App\logs\launcher.log`
+
+Linux follows the XDG Base Directory convention:
+
+- Packager: `${XDG_STATE_HOME:-$HOME/.local/state}/lw.Web2App/logs/packer.log`
+- Generated app: `${XDG_STATE_HOME:-$HOME/.local/state}/lw.Web2App/apps/<app_id>/logs/app.log`
+- Launcher failures: `${XDG_STATE_HOME:-$HOME/.local/state}/lw.Web2App/logs/launcher.log`
 
 INFO records packaging stages, resource counts and sizes, payload digest, server port, WebView2 version, initialization, and navigation results. DEBUG additionally records static requests, ZIP cache hits/misses, and SPA fallback. The Runtime also records `console.error`, uncaught script errors, and unhandled Promise rejections as `[WEB-ERROR]`; ordinary `console.log` calls are not logged.
 
@@ -96,21 +102,20 @@ Logging settings are stored in the Manifest. The GUI currently exposes only enab
 
 ## System Requirements
 
-- Windows 10 1809+ or Windows 11
-- x64
-- Microsoft WebView2 Evergreen Runtime
+- Windows 10 1809+ / Windows 11 x64 with Microsoft WebView2 Evergreen Runtime; or
+- Ubuntu 22.04 / 24.04 x86_64 with GTK3, WebKitGTK 4.1, and OpenSSL 3 runtime libraries.
 
 Windows 11 and most maintained Windows 10 installations already include WebView2 Runtime. If it is unavailable, the generated application displays an installation prompt.
 
-Windows 7 and Windows 8 are not supported. The project does not bundle the Fixed Version Runtime because it would add more than 250 MiB to the distribution.
+Windows 7/8 are unsupported. The Linux Beta is limited to Ubuntu 22.04/24.04 x86_64; Debian, Mint, ARM64, RPM-based systems, and other WebKitGTK ABIs are not compatibility claims. The project does not bundle a complete browser runtime.
 
 ## Download CI Builds
 
-Every push and pull request produces a tested Windows x64 package through GitHub Actions:
+Every push and pull request builds and tests Windows x64, Ubuntu 22.04 x86_64, and Ubuntu 24.04 x86_64 through GitHub Actions:
 
 1. Open the repository's **Actions** page.
-2. Select the latest successful `Windows x64` workflow run.
-3. Download `lw.Web2App-windows-x64` from the **Artifacts** section.
+2. Select the latest successful `Windows and Linux x64` workflow run.
+3. Download the Windows or matching Ubuntu artifact.
 
 The artifact contains:
 
@@ -125,11 +130,13 @@ The artifact contains:
 
 Pushing a `v*` tag also creates a GitHub Release containing the ZIP distribution and its SHA-256 checksum file.
 
+Linux artifacts include a lw.Web2App `.deb`, a portable `.tar.gz`, the generated single-file `examples/wechat-article-formatter`, and SHA-256 files. The DEB installs desktop-menu metadata and declares GTK/WebKitGTK dependencies; the portable package and generated apps still require those libraries on the target Ubuntu system.
+
 ### CI Integration-Test Project
 
 [wechat-article-formatter](https://github.com/lxw112190/wechat-article-formatter) is a Vite, React, and TypeScript Markdown editor for WeChat Official Account articles, with themes, mobile preview, and rich-text copying. CI checks out its `main` branch, runs `npm ci` and `npm run build`, and packages the resulting `dist` directory with the freshly built lw.Web2App. It then runs `inspect` against `examples/wechat-article-formatter.exe` to reload the manifest and verify the payload SHA-256. Any failure stops the workflow.
 
-This example exercises a real Vite/React production build, a Chinese application title, a non-trivial static asset set, SPA fallback, PE metadata, and final distribution packaging. Its application data remains in WebView2's local browser storage, so backups should be exported just as they are in the web version.
+This example exercises a real Vite/React build, a Chinese title, a non-trivial asset set, SPA fallback, Windows PE metadata, Linux ELF permissions, and final distribution packaging. Linux CI also launches the generated app under Xvfb and checks WebKitGTK initialization and navigation logs.
 
 ## Build from Source
 
@@ -146,6 +153,20 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 The output is `build/Release/lw.Web2App.exe`. Launching it without arguments opens the graphical packager.
+
+Ubuntu 22.04/24.04:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y cmake ninja-build g++ pkg-config libgtk-3-dev \
+  libwebkit2gtk-4.1-dev libssl-dev
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+cpack --config build/CPackConfig.cmake -G DEB -B dist
+```
+
+The Linux executable is `build/lw.Web2App`, and the DEB is written under `dist/`. Launching it without arguments opens the GTK3 packager.
 
 ### Optional Offline Dependency Cache
 
@@ -201,6 +222,14 @@ lw.Web2App.exe pack-url https://example.com .\Example.exe --title "Online App"
 lw.Web2App.exe inspect .\MyApp.exe
 ```
 
+Linux uses the same command structure without `.exe`; generated files automatically receive executable permissions:
+
+```bash
+./lw.Web2App pack ./dist ./MyApp --title "My App"
+./lw.Web2App inspect ./MyApp
+./MyApp
+```
+
 Additional options:
 
 - `--no-spa`: disable SPA fallback.
@@ -217,7 +246,7 @@ A generated EXE can also execute CLI packaging commands. Only its original Runne
 ## Payload V2 Format
 
 ```text
-Runner PE
+Runner PE / ELF
 Resource ZIP       empty in online URL mode
 Manifest JSON
 Footer             fixed 80 bytes
@@ -247,7 +276,8 @@ This project packages trusted static web applications. It is not a sandbox for h
 ## Project Layout
 
 ```text
-src/app/       Win32 GUI, CLI, and program entry point
+src/app/       Windows Win32 GUI, CLI, and entry point
+src/linux/     Linux GTK3 GUI, CLI, and WebKitGTK Runtime
 src/webview/   WebView2 host
 src/packer/    Manifest, payload, and packer
 src/runtime/   ZIP resource access, LRU cache, and local HTTP server
@@ -260,19 +290,18 @@ tests/         Unit and packaging/resource integration tests
 
 The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 
-1. Configures a VS2022 Windows x64 Release build.
-2. Builds `lw.Web2App.exe`.
-3. Runs all CTest tests.
-4. Builds the `wechat-article-formatter` Vite production bundle.
-5. Packages the test project as an EXE and validates it with `inspect`.
-6. Creates a distribution directory and `SHA256SUMS.txt`.
-7. Produces `lw.Web2App-windows-x64.zip`.
-8. Uploads a GitHub Actions artifact.
-9. Publishes the ZIP and checksum for `v*` tags.
+1. Builds and tests Windows x64 with VS2022 on Windows 2022.
+2. Builds and tests Linux x64 with Ninja, GTK3, WebKitGTK 4.1, and OpenSSL on Ubuntu 22.04 and 24.04.
+3. Builds the `wechat-article-formatter` Vite bundle in all platform jobs.
+4. Generates a Windows EXE or Linux ELF and validates its payload with `inspect`.
+5. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
+6. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts.
+7. Collects all tested platform files into releases for `v*` tags.
 
 ## Dependencies
 
 - Microsoft WebView2 SDK — Microsoft software license
+- GTK3 / WebKitGTK / OpenSSL — Linux system dynamic dependencies under their respective licenses
 - miniz — MIT License
 - cpp-httplib — MIT License
 - nlohmann/json — MIT License
@@ -280,17 +309,18 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-## Cross-Platform Roadmap
+## Linux Beta and Roadmap
 
-Linux support is the primary next milestone. The implementation will evolve along explicit platform boundaries instead of merely wrapping Windows code in preprocessor checks:
+The first Ubuntu implementation now includes the cross-platform core, GTK3 GUI, CLI, ELF Runner, WebKitGTK Runtime, XDG data/cache/log directories, DEB/TGZ packaging, and dual-version Linux CI. It continues to write `LWWEB002` and read legacy `LWWEB001` payloads.
 
-1. Keep payload, manifest, ZIP, SHA-256, path validation, resource serving, and LRU caching in a platform-neutral core.
-2. Retain the Win32 + WebView2 + PE-resource backend for Windows, and add a native Linux window and system-WebView backend, initially evaluating GTK + WebKitGTK.
-3. Add an ELF Runner and Linux application metadata. The first intended package is an x86_64 `.tar.gz`, with AppImage under evaluation; `.deb`, `.rpm`, and ARM64 will follow only after the base runtime is stable.
-4. Add Linux CI for compilation, unit tests, static-site packaging, payload inspection, and a minimal launch smoke test.
-5. Preserve parsing compatibility with the `LWWEB001` V1 container. New applications use `LWWEB002` V2; later versions will be added only when platform requirements demand them.
+Explicit Linux Beta boundaries:
 
-Until that work is delivered, the README, releases, and repository description should continue to say **Windows only today** rather than presenting Linux support as complete.
+- Ubuntu 22.04/24.04 x86_64 only. Generated apps run within the same platform family; Windows and Linux Runners cannot generate each other's binaries.
+- Generated output is a single ELF with an appended payload. The lw.Web2App tool has `.deb`/`.tar.gz` packages, but arbitrary generated apps do not yet receive their own DEB, desktop file, or icon.
+- Rendering uses the system WebKitGTK 4.1. Browser security updates and Web API behavior therefore follow Ubuntu updates.
+- GTK packaging is currently synchronous. Background packaging, cancellation, and percentage progress for very large projects remain future work.
+
+Next priorities are generated-app desktop/icon/DEB metadata, AppImage evaluation, external-link and download policies, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
 
 Other planned improvements:
 

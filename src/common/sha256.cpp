@@ -2,8 +2,12 @@
 
 #include "lwweb/common/error.h"
 
+#ifdef _WIN32
 #include <Windows.h>
 #include <bcrypt.h>
+#else
+#include <openssl/evp.h>
+#endif
 
 #include <fstream>
 #include <iomanip>
@@ -16,6 +20,7 @@ namespace {
 class Hash {
  public:
   Hash() {
+#ifdef _WIN32
     if (BCryptOpenAlgorithmProvider(&algorithm_, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
       throw Error("BCryptOpenAlgorithmProvider(SHA-256) failed");
     DWORD bytes = 0;
@@ -30,14 +35,27 @@ class Hash {
       BCryptCloseAlgorithmProvider(algorithm_, 0);
       throw Error("BCryptCreateHash failed");
     }
+#else
+    context_ = EVP_MD_CTX_new();
+    if (!context_ || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1) {
+      if (context_) EVP_MD_CTX_free(context_);
+      context_ = nullptr;
+      throw Error("OpenSSL SHA-256 initialization failed");
+    }
+#endif
   }
 
   ~Hash() {
+#ifdef _WIN32
     if (hash_) BCryptDestroyHash(hash_);
     if (algorithm_) BCryptCloseAlgorithmProvider(algorithm_, 0);
+#else
+    if (context_) EVP_MD_CTX_free(context_);
+#endif
   }
 
   void Update(const std::uint8_t* data, std::size_t size) {
+#ifdef _WIN32
     while (size) {
       const auto chunk = static_cast<ULONG>((std::min)(size, std::size_t{1u << 30}));
       if (BCryptHashData(hash_, const_cast<PUCHAR>(data), chunk, 0) < 0)
@@ -45,20 +63,35 @@ class Hash {
       data += chunk;
       size -= chunk;
     }
+#else
+    if (size && EVP_DigestUpdate(context_, data, size) != 1)
+      throw Error("OpenSSL SHA-256 update failed");
+#endif
   }
 
   Sha256Digest Finish() {
     Sha256Digest digest{};
+#ifdef _WIN32
     if (BCryptFinishHash(hash_, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0)
       throw Error("BCryptFinishHash failed");
+#else
+    unsigned int size = 0;
+    if (EVP_DigestFinal_ex(context_, digest.data(), &size) != 1 ||
+        size != digest.size())
+      throw Error("OpenSSL SHA-256 finalization failed");
+#endif
     return digest;
   }
 
  private:
+#ifdef _WIN32
   BCRYPT_ALG_HANDLE algorithm_ = nullptr;
   BCRYPT_HASH_HANDLE hash_ = nullptr;
   DWORD object_size_ = 0;
   std::vector<std::uint8_t> object_;
+#else
+  EVP_MD_CTX* context_ = nullptr;
+#endif
 };
 
 }  // namespace

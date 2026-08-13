@@ -2,21 +2,21 @@
 
 [简体中文](README.md) | [English](README_EN.md)
 
-一个面向桌面平台的轻量网页应用打包工具。当前版本支持 Windows x64，可在无需重新编译网页项目的情况下，将 HTML、Vue、React、Vite 等静态产物快速打包为独立 EXE。
+一个面向桌面平台的轻量网页应用打包工具。当前版本支持 Windows x64，并提供 Ubuntu 22.04/24.04 x86_64 Beta，可在无需重新编译网页项目的情况下，将 HTML、Vue、React、Vite 等静态产物打包为单文件桌面应用。
 
-目标电脑不需要安装 Node.js、Rust、.NET 或 Electron，只需具备 Microsoft WebView2 Evergreen Runtime。
+目标电脑不需要安装 Node.js、Rust、.NET 或 Electron。Windows 使用 Microsoft WebView2 Evergreen Runtime；Linux 使用系统提供的 GTK3 与 WebKitGTK 4.1。
 
-> **平台状态：** 当前稳定实现仅支持 Windows 10/11 x64。Linux 是下一阶段的首要目标，计划复用跨平台 Payload、ZIP、Manifest、SHA-256、本地资源服务和缓存核心，并增加 Linux 原生窗口/WebView 与 ELF/AppImage 分发实现。当前版本不能在 Linux 上构建或运行，详见[跨平台规划](#跨平台规划)。
+> **平台状态：** Windows 10/11 x64 为稳定版；Ubuntu 22.04/24.04 x86_64 为首个 Linux Beta。Linux 已实现 GTK3 图形打包器、CLI、ELF Runner、WebKitGTK Runtime、单文件 Payload、日志及 `.deb`/`.tar.gz` CI 产物。当前不支持其他发行版、ARM64、AppImage 或 RPM。
 
 <img src="docs/assets/lw.Web2App.png" alt="lw.Web2App Windows 图形界面" width="760">
 
 ## 功能特性
 
-- 原生 Win32 图形界面，同时提供 CLI。
+- Windows 使用原生 Win32 + WebView2，Linux 使用 GTK3 + WebKitGTK 4.1，两端均提供 GUI 和 CLI。
 - 图形界面实时显示打包阶段和结果状态，状态区域采用独立重绘，连续更新时保持清晰。
-- 本地 HTML、Vue、React、Vite 静态目录打包为单个 EXE。
-- 在线 `http://`、`https://` 地址打包为单个 EXE。
-- 使用 WebView2 Evergreen Runtime，WebView2 Loader 静态链接进 EXE。
+- 本地 HTML、Vue、React、Vite 静态目录打包为单个 Windows EXE 或 Linux ELF 应用。
+- 在线 `http://`、`https://` 地址打包为单文件桌面应用。
+- Windows 使用 WebView2 Evergreen Runtime；Linux 动态使用系统 WebKitGTK，生成应用不会捆绑完整浏览器内核。
 - 自主设计的 `LWWEB002` V2 Payload 容器格式，并兼容读取 `LWWEB001` V1。
 - 程序启动时验证资源 ZIP 与 Manifest 的联合 SHA-256，内容或配置损坏时拒绝继续运行。
 - 生成应用默认无边框全屏显示，支持 `F11` 切换全屏、`Esc` 退出全屏。
@@ -33,27 +33,27 @@
 
 ## 工作原理
 
-lw.Web2App 采用“原生 Runner + 文件尾部载荷”的方式生成单文件应用。它不是把网页源码翻译成 C++，也不是把 Chromium、Node.js 或 Electron 塞进每个程序，而是复用 Windows 上的 WebView2 Runtime 来渲染网页。
+lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文件应用。它不是把网页源码翻译成 C++，也不会把 Chromium、Node.js 或 Electron 塞进每个程序。Windows 复用 WebView2，Linux 复用 WebKitGTK；两端共享 Manifest、ZIP、SHA-256、本地 HTTP 服务、路径安全和 LRU 缓存核心。
 
 ### 打包阶段
 
 1. **检查输入**：本地模式先确认静态目录和入口 HTML 存在，并对文件数量、单文件大小及总大小应用安全上限。
-2. **复制 Runner**：以当前 `lw.Web2App.exe` 为原生程序模板，只复制它原始的 PE Runner 部分。即使使用已经打包过的 EXE 再次打包，也不会嵌套旧载荷。
-3. **写入 PE 资源**：在副本中更新图标、产品名、文件说明、公司、版本和版权等 Windows 资源，因此资源管理器“属性 → 详细信息”可以直接显示这些字段。
+2. **复制 Runner**：以当前平台的 `lw.Web2App.exe` 或 `lw.Web2App` 为模板，只复制其原始 PE/ELF Runner 部分。即使使用已经打包过的应用再次打包，也不会嵌套旧载荷。
+3. **写入平台元数据**：Windows 更新图标、产品名、文件说明、公司、版本和版权等 PE 资源；Linux 为生成文件补充可执行权限。Linux 桌面图标与菜单项由 lw.Web2App 自身的 DEB 包安装，任意生成应用的独立桌面集成留待后续版本。
 4. **构建 ZIP**：递归读取静态目录，将规范化后的相对路径流式压缩到临时 ZIP 文件，避免把源文件和完整 ZIP 同时驻留内存。绝对路径、盘符、`..`、NUL 和重复路径会被拒绝。
-5. **追加容器**：依次在 PE 文件尾部流式写入资源 ZIP、Manifest JSON 和固定 80 字节 Footer。V2 Footer 记录格式版本、标志、各区段偏移/长度，以及“资源 ZIP + Manifest”的联合 SHA-256。
+5. **追加容器**：依次在 PE/ELF 文件尾部流式写入资源 ZIP、Manifest JSON 和固定 80 字节 Footer。V2 Footer 记录格式版本、标志、各区段偏移/长度，以及“资源 ZIP + Manifest”的联合 SHA-256。
 
 在线 URL 模式不保存远端网站内容，ZIP 为空；Manifest 只记录目标 URL 和窗口配置，启动时直接导航到该地址。因此在线模式需要联网，页面变化也会随网站实时变化。
 
 ### 运行阶段
 
-1. 程序从自身末尾读取 `LWWEB002` Footer；没有 Footer 时显示打包器界面，有 Footer 时进入生成应用模式，同时仍可读取旧版 `LWWEB001`。
-2. Runner 检查所有偏移和长度是否位于 EXE 内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。校验失败时拒绝打开嵌入内容。
+1. 程序从自身末尾读取 `LWWEB002` Footer；没有 Footer 时显示当前平台的打包器界面，有 Footer 时进入生成应用模式，同时仍可读取旧版 `LWWEB001`。
+2. Runner 检查所有偏移和长度是否位于当前 PE/ELF 文件内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。校验失败时拒绝打开嵌入内容。
 3. 本地模式只读取 ZIP 中央目录建立索引，不会把网站完整解压到磁盘或一次性载入内存。
 4. Runner 在 `127.0.0.1` 随机端口启动仅供本进程页面访问的 HTTP 服务，严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback。
 5. 小型热点资源进入 32 MiB LRU 缓存；大文件按请求读取，不长期占用内存。
-6. 原生窗口创建 WebView2 Controller，并导航到本地随机地址或在线 URL。窗口标题、尺寸、是否可调整、默认全屏和开发者工具策略来自 Manifest；全屏时可用 `F11` 切换、`Esc` 退出。
-7. 每个应用使用稳定 `app_id`，WebView2 用户数据存放在 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`，重命名 EXE 不会改变存储位置。
+6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。两端都导航到本地随机地址或在线 URL，窗口标题、尺寸、是否可调整、默认全屏和开发者工具策略来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
+7. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
 
 SHA-256 用于发现资源损坏或修改，不等同于发布者认证；Manifest 配置和整个 EXE 的可信发布仍应依靠 Authenticode 等代码签名机制。
 
@@ -64,6 +64,12 @@ lw.Web2App 使用 spdlog 同步滚动文件日志，默认级别为 INFO，单�
 - 打包器日志：`%LOCALAPPDATA%\lw.Web2App\logs\packer.log`
 - 生成应用日志：`%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\logs\app.log`
 - Manifest/Payload 尚未成功加载时的启动错误：`%LOCALAPPDATA%\lw.Web2App\logs\launcher.log`
+
+Linux 遵循 XDG Base Directory 约定：
+
+- 打包器日志：`${XDG_STATE_HOME:-$HOME/.local/state}/lw.Web2App/logs/packer.log`
+- 生成应用日志：`${XDG_STATE_HOME:-$HOME/.local/state}/lw.Web2App/apps/<app_id>/logs/app.log`
+- 启动错误：`${XDG_STATE_HOME:-$HOME/.local/state}/lw.Web2App/logs/launcher.log`
 
 INFO 记录打包阶段、资源数量与大小、Payload 摘要、服务端口、WebView2 版本、初始化和导航结果；DEBUG 额外记录静态资源请求、ZIP 缓存命中/未命中和 SPA fallback。Runtime 还会把 `console.error`、未捕获脚本错误和未处理 Promise rejection 记录为 `[WEB-ERROR]`，普通 `console.log` 不会写入日志。
 
@@ -97,21 +103,20 @@ INFO 记录打包阶段、资源数量与大小、Payload 摘要、服务端口�
 
 ## 系统要求
 
-- Windows 10 1809+ 或 Windows 11
-- x64
-- Microsoft WebView2 Evergreen Runtime
+- Windows 10 1809+ / Windows 11 x64，以及 Microsoft WebView2 Evergreen Runtime；或
+- Ubuntu 22.04 / 24.04 x86_64，以及 GTK3、WebKitGTK 4.1、OpenSSL 3 运行库。
 
 Windows 11 和大多数仍在维护的 Windows 10 设备已经安装 WebView2 Runtime。未安装时，生成的程序会提示用户安装。
 
-不支持 Windows 7、Windows 8，也不会捆绑超过 250 MiB 的 Fixed Version Runtime。
+不支持 Windows 7/8。Linux 首版只承诺 Ubuntu 22.04/24.04 x86_64，不承诺 Debian、Linux Mint、国产发行版、ARM64、Wayland-only 环境或其他 WebKitGTK ABI；项目也不会捆绑完整浏览器 Runtime。
 
 ## 下载 CI 构建产物
 
-每次推送和 Pull Request 都会通过 GitHub Actions 构建并测试 Windows x64 版本：
+每次推送和 Pull Request 都会通过 GitHub Actions 构建并测试 Windows x64、Ubuntu 22.04 x86_64 和 Ubuntu 24.04 x86_64：
 
 1. 打开项目的 **Actions** 页面。
-2. 选择最新一次成功的 `Windows x64` 工作流。
-3. 在页面底部的 **Artifacts** 区域下载 `lw.Web2App-windows-x64`。
+2. 选择最新一次成功的 `Windows and Linux x64` 工作流。
+3. 在页面底部下载 `lw.Web2App-windows-x64` 或对应 Ubuntu 版本的 Artifact。
 
 Artifact 中包含：
 
@@ -126,11 +131,13 @@ Artifact 中包含：
 
 推送 `v*` 标签时，CI 还会创建 GitHub Release，并附加可直接下载的 ZIP 包和 SHA-256 校验文件。
 
+Linux Artifact 额外包含 lw.Web2App 的 `.deb`、便携 `.tar.gz`、生成的单文件 `examples/wechat-article-formatter` 以及各文件 SHA-256。`.deb` 安装 GTK/WebKitGTK 依赖并注册应用菜单；便携包与生成应用仍要求目标 Ubuntu 已安装运行库。
+
 ### CI 集成测试项目
 
 [wechat-article-formatter](https://github.com/lxw112190/wechat-article-formatter) 是一个面向微信公众号的纯前端 Markdown 排版与编辑工具，采用 Vite、React 和 TypeScript，支持主题排版、手机预览及复制富文本正文。CI 会检出该项目的 `main` 分支，执行 `npm ci` 和 `npm run build` 生成 `dist`，再用本次构建的 lw.Web2App 将它打包成 `examples/wechat-article-formatter.exe`。随后运行 `inspect` 重新读取 Manifest 并验证 Payload SHA-256；任一步失败都会使工作流失败。
 
-这个示例同时验证了真实 Vite/React 产物、中文标题、较多静态资源、SPA fallback、PE 元数据和最终分发打包流程。示例应用的数据仍保存在 WebView2 对应的本地浏览器存储中，请像使用网页版本一样定期导出备份。
+这个示例同时验证了真实 Vite/React 产物、中文标题、较多静态资源、SPA fallback、Windows PE 元数据、Linux ELF 权限和最终分发流程。Linux CI 还会在 Xvfb 中启动生成应用，并检查 WebKitGTK 初始化与导航完成日志。应用数据保存在各平台对应的本地浏览器存储中，请像使用网页版本一样定期导出备份。
 
 ## 从源码构建
 
@@ -153,6 +160,20 @@ build/Release/lw.Web2App.exe
 ```
 
 直接双击运行会打开图形界面。
+
+Ubuntu 22.04/24.04：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y cmake ninja-build g++ pkg-config libgtk-3-dev \
+  libwebkit2gtk-4.1-dev libssl-dev
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+cpack --config build/CPackConfig.cmake -G DEB -B dist
+```
+
+Linux 可执行文件为 `build/lw.Web2App`，DEB 位于 `dist/`。无参数启动会打开 GTK3 图形打包器。
 
 ### 可选离线依赖缓存
 
@@ -208,6 +229,14 @@ lw.Web2App.exe pack-url https://example.com .\Example.exe --title "在线应用"
 lw.Web2App.exe inspect .\MyApp.exe
 ```
 
+Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可执行权限：
+
+```bash
+./lw.Web2App pack ./dist ./MyApp --title "我的应用"
+./lw.Web2App inspect ./MyApp
+./MyApp
+```
+
 其他开关：
 
 - `--no-spa`：关闭 SPA fallback。
@@ -224,7 +253,7 @@ lw.Web2App.exe inspect .\MyApp.exe
 ## Payload V2 格式
 
 ```text
-Runner PE
+Runner PE / ELF
 Resource ZIP       在线 URL 模式为空
 Manifest JSON
 Footer             固定 80 字节
@@ -254,7 +283,8 @@ Footer             固定 80 字节
 ## 项目结构
 
 ```text
-src/app/       Win32 GUI、CLI 和程序入口
+src/app/       Windows Win32 GUI、CLI 和程序入口
+src/linux/     Linux GTK3 GUI、CLI 和 WebKitGTK Runtime
 src/webview/   WebView2 宿主
 src/packer/    Manifest、Payload 和打包器
 src/runtime/   ZIP 资源读取、LRU 和本地 HTTP 服务
@@ -267,19 +297,18 @@ tests/         单元测试与打包/读取集成测试
 
 CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执行以下流程：
 
-1. 使用 VS2022 配置 Windows x64 Release。
-2. 编译 `lw.Web2App.exe`。
-3. 运行全部 CTest 测试。
-4. 构建 `wechat-article-formatter` 的 Vite 生产产物。
-5. 将测试项目打包为 EXE，并用 `inspect` 校验生成载荷。
-6. 生成分发目录和 `SHA256SUMS.txt`。
-7. 压缩为 `lw.Web2App-windows-x64.zip`。
-8. 上传 GitHub Actions Artifact。
-9. 对 `v*` 标签创建 GitHub Release 并上传 ZIP 与校验文件。
+1. Windows 2022 使用 VS2022 构建和测试 Windows x64。
+2. Ubuntu 22.04、24.04 使用 Ninja、GTK3、WebKitGTK 4.1 和 OpenSSL 构建并测试 Linux x64。
+3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
+4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256。
+5. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
+6. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact。
+7. 对 `v*` 标签汇总所有平台产物到 GitHub Release。
 
 ## 第三方依赖
 
 - Microsoft WebView2 SDK：Microsoft 软件许可
+- GTK3 / WebKitGTK / OpenSSL：Linux 系统动态依赖，遵循各自许可证
 - miniz：MIT License
 - cpp-httplib：MIT License
 - nlohmann/json：MIT License
@@ -287,19 +316,18 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 
 具体信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
-## 跨平台规划
+## Linux Beta 与后续规划
 
-当前为 V2 架构的早期版本，已经具备本地/URL 打包、GUI、CLI、资源与配置完整性、按需读取、SPA fallback 和 PE 元数据能力。
+Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、WebKitGTK Runtime、XDG 数据/缓存/日志目录、DEB/TGZ 打包及双版本 CI。Payload 继续使用 `LWWEB002`，并兼容读取 `LWWEB001`。
 
-下一阶段将优先支持 Linux，而不是只把 Windows 代码加上条件编译。计划按以下边界演进：
+当前 Linux Beta 的明确边界：
 
-1. 将 Payload、Manifest、ZIP、SHA-256、路径安全、资源服务和 LRU 缓存整理为无 Win32 依赖的跨平台核心。
-2. 保留 Windows 的 Win32 + WebView2 + PE Resource 实现；Linux 增加原生窗口和系统 WebView 适配层，优先评估 GTK + WebKitGTK。
-3. 为 Linux 增加 ELF Runner 和应用元数据处理；首批计划提供 x86_64 的 `.tar.gz`，并评估 AppImage。`.deb`、`.rpm` 和 ARM64 将在基础运行链路稳定后再决定。
-4. 增加 Linux CI，覆盖编译、单元测试、静态目录打包、Payload 校验和最小启动冒烟测试。
-5. 保持 `LWWEB001` V1 容器的解析兼容；新应用使用 `LWWEB002` V2，后续只有平台确实需要时才扩展版本。
+- 仅支持 Ubuntu 22.04/24.04 x86_64；生成应用必须在相同平台家族运行，不能把 Windows EXE 直接拿到 Linux，也不能跨平台生成另一端 Runner。
+- 生成结果是带 Payload 的单文件 ELF；lw.Web2App 工具本身提供 `.deb`/`.tar.gz`，但尚未为每个任意生成应用制作独立 DEB、desktop 文件和图标。
+- 使用系统 WebKitGTK 4.1，不捆绑浏览器内核，因此安全更新与 Web API 兼容性跟随 Ubuntu 更新。
+- GTK 界面打包过程当前同步执行；超大型项目的后台任务、取消和进度百分比属于后续改进。
 
-Linux 支持完成前，README、Release 和仓库描述都应继续明确标注“当前仅支持 Windows”，不把规划当作已经交付的能力。
+下一阶段优先增加生成应用的 desktop/图标/DEB 元数据、AppImage 可行性、外部链接与下载策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
 
 其他后续方向：
 
