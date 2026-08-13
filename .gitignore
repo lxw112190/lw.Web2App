@@ -1,6 +1,8 @@
 /build/
 /build-ninja/
 /build-audit/
+/build-local-windows/
+/build-local-windows-ninja/
 /.deps/
 /.test-work/
 /out/

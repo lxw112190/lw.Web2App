@@ -1,5 +1,6 @@
 #include "lwweb/packer/payload.h"
 #include "lwweb/packer/packer.h"
+#include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/runtime/resource_server.h"
 
@@ -75,6 +76,10 @@ void RunPayloadTests() {
   pack.source_directory = base / "site";
   pack.output = base / "packed.exe";
   pack.manifest.title = "Integration Test";
+  {
+    std::ofstream previous(pack.output, std::ios::binary);
+    previous << "previous application";
+  }
   lwweb::PackApplication(pack);
   const auto loaded = lwweb::LoadPayload(pack.output);
   Check(loaded.manifest.title == "Integration Test", "packed manifest loads");
@@ -97,6 +102,26 @@ void RunPayloadTests() {
   Check(std::string(resource.begin(), resource.end()) == "body{color:red}",
         "ZIP resource extracts on demand");
   Check(!store.Exists("../index.html"), "unsafe runtime path rejected");
+
+  // ZIP 阶段故意失败时，已经存在的正式产物必须保持逐字节不变，且暂存文件
+  // 必须被清理。这覆盖“临时文件完整构建 + 成功后原子替换”的回归行为。
+  const auto before_failed_pack = lwweb::ReadFileBytes(pack.output);
+  pack.limits.max_file_count = 1;
+  bool failed_pack_rejected = false;
+  try {
+    lwweb::PackApplication(pack);
+  } catch (...) {
+    failed_pack_rejected = true;
+  }
+  Check(failed_pack_rejected, "pack failure is reported");
+  Check(lwweb::ReadFileBytes(pack.output) == before_failed_pack,
+        "failed pack preserves the existing output");
+  for (const auto& item : std::filesystem::directory_iterator(base)) {
+    const auto name = item.path().filename().u8string();
+    Check(name.find(".lwweb-building-") == std::string::npos,
+          "failed pack cleans staging artifacts");
+  }
+  pack.limits.max_file_count = 100000;
 
   {
     std::fstream executable(pack.output, std::ios::binary | std::ios::in | std::ios::out);

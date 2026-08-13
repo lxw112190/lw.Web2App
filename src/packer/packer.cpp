@@ -8,11 +8,14 @@
 #include "lwweb/packer/payload.h"
 #ifdef _WIN32
 #include "lwweb/pe/pe_resources.h"
+#include <Windows.h>
 #endif
 
 #include <miniz.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
@@ -21,6 +24,57 @@
 
 namespace lwweb {
 namespace {
+
+// 为每次打包生成与最终产物同目录的唯一暂存文件。保持在同一目录可确保
+// 最后发布时不会跨卷复制，并避免构建中的半成品被资源管理器当作 EXE 扫描。
+std::filesystem::path StagingPathFor(const std::filesystem::path& output) {
+  static std::atomic<std::uint64_t> sequence{0};
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    std::ostringstream suffix;
+    suffix << ".lwweb-building-" << std::hex
+           << std::chrono::steady_clock::now().time_since_epoch().count() << '-'
+           << sequence.fetch_add(1, std::memory_order_relaxed) << ".tmp";
+    auto staging = output;
+    staging += std::filesystem::u8path(suffix.str());
+    std::error_code error;
+    if (!std::filesystem::exists(staging, error)) return staging;
+  }
+  throw Error("Cannot allocate a unique staging file in the output directory");
+}
+
+#ifdef _WIN32
+bool IsTransientPublishError(DWORD code) {
+  return code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION ||
+         code == ERROR_LOCK_VIOLATION || code == ERROR_OPEN_FAILED ||
+         code == ERROR_USER_MAPPED_FILE || code == ERROR_RETRY;
+}
+#endif
+
+// 将已经完整校验的暂存文件发布为最终产物。暂存文件与目标位于同一目录，
+// Windows 使用 MoveFileEx(REPLACE_EXISTING)，Linux 使用同文件系统 rename；
+// 两者都不会先删除旧产物，因此发布失败时旧文件仍然可用。
+void PublishCompletedFile(const std::filesystem::path& staging,
+                          const std::filesystem::path& output) {
+#ifdef _WIN32
+  constexpr std::array<DWORD, 3> retry_delays_ms = {75, 200, 500};
+  for (std::size_t attempt = 0; attempt <= retry_delays_ms.size(); ++attempt) {
+    if (attempt != 0) Sleep(retry_delays_ms[attempt - 1]);
+    if (MoveFileExW(staging.c_str(), output.c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+      return;
+    const auto code = GetLastError();
+    if (!IsTransientPublishError(code) || attempt == retry_delays_ms.size()) {
+      throw Error("Cannot publish completed application (Win32 error " +
+                  std::to_string(code) + "): " + WindowsErrorMessage(code));
+    }
+  }
+#else
+  std::error_code error;
+  std::filesystem::rename(staging, output, error);
+  if (error)
+    throw Error("Cannot publish completed application: " + error.message());
+#endif
+}
 
 void Progress(const PackOptions& options, const std::string& message) {
   if (options.progress) options.progress(message);
@@ -136,6 +190,11 @@ void CopyRunnerPrefix(const std::filesystem::path& runner,
     if (!out) throw Error("Cannot copy runner");
     remaining -= count;
   }
+  out.flush();
+  if (!out) throw Error("Cannot flush copied runner");
+  out.close();
+  if (!out) throw Error("Cannot close copied runner");
+  input.close();
 }
 
 }  // namespace
@@ -153,43 +212,55 @@ void PackApplication(const PackOptions& options) {
     // Logging is diagnostic and must never prevent packaging.
   }
   std::error_code error;
+  std::filesystem::path staging;
   try {
-  phase = "manifest validation";
-  auto manifest = options.manifest;
-  if (manifest.app_id.empty())
-    manifest.app_id = "app-" + HexDigest(Sha256(
-        reinterpret_cast<const std::uint8_t*>(manifest.title.data()), manifest.title.size()))
-                            .substr(0, 24);
-  ValidateManifest(manifest);
-  log.Info("Packaging started");
-  log.Info("Mode: " + std::string(manifest.mode == AppMode::Local ? "local" : "url"));
-  log.Info("Entry: " + (manifest.mode == AppMode::Local ? manifest.entry : manifest.url));
-  log.Info("SPA fallback: " + std::string(manifest.spa_fallback ? "true" : "false"));
-  if (manifest.mode == AppMode::Local)
-    log.Info("Source: " + options.source_directory.u8string());
-  if (options.runner.empty() || options.output.empty())
-    throw Error("Runner and output paths are required");
-  if (manifest.mode == AppMode::Local) {
-    if (!std::filesystem::is_directory(options.source_directory))
-      throw Error("Local mode requires a source directory");
-    const auto entry = options.source_directory / std::filesystem::u8path(manifest.entry);
-    if (!std::filesystem::is_regular_file(entry)) throw Error("Entry HTML file does not exist");
-  }
-  if (!options.output.parent_path().empty())
-    std::filesystem::create_directories(options.output.parent_path(), error);
-  phase = "runner copy";
-  Progress(options, "Copying runner");
-  CopyRunnerPrefix(options.runner, options.output);
+    phase = "manifest validation";
+    auto manifest = options.manifest;
+    if (manifest.app_id.empty())
+      manifest.app_id = "app-" + HexDigest(Sha256(
+          reinterpret_cast<const std::uint8_t*>(manifest.title.data()), manifest.title.size()))
+                              .substr(0, 24);
+    ValidateManifest(manifest);
+    log.Info("Packaging started");
+    log.Info("Mode: " + std::string(manifest.mode == AppMode::Local ? "local" : "url"));
+    log.Info("Entry: " + (manifest.mode == AppMode::Local ? manifest.entry : manifest.url));
+    log.Info("SPA fallback: " + std::string(manifest.spa_fallback ? "true" : "false"));
+    if (manifest.mode == AppMode::Local)
+      log.Info("Source: " + options.source_directory.u8string());
+    if (options.runner.empty() || options.output.empty())
+      throw Error("Runner and output paths are required");
+    if (std::filesystem::absolute(options.runner).lexically_normal() ==
+        std::filesystem::absolute(options.output).lexically_normal())
+      throw Error("Output path must differ from the runner path");
+    if (manifest.mode == AppMode::Local) {
+      if (!std::filesystem::is_directory(options.source_directory))
+        throw Error("Local mode requires a source directory");
+      const auto entry = options.source_directory / std::filesystem::u8path(manifest.entry);
+      if (!std::filesystem::is_regular_file(entry)) throw Error("Entry HTML file does not exist");
+    }
+    if (!options.output.parent_path().empty()) {
+      std::filesystem::create_directories(options.output.parent_path(), error);
+      if (error) throw Error("Cannot create output directory: " + error.message());
+    }
+
+    staging = StagingPathFor(options.output);
+    auto working = options;
+    working.output = staging;
+    log.Debug("Staging: " + staging.u8string());
+
+    phase = "runner copy";
+    Progress(options, "Copying runner");
+    CopyRunnerPrefix(options.runner, staging);
     phase = "platform metadata update";
     Progress(options, "Writing platform metadata");
 #ifdef _WIN32
-    UpdatePeResources(options.output, options.metadata);
+    UpdatePeResources(staging, options.metadata);
     log.Info("PE version metadata updated successfully");
     log.Info(options.metadata.icon.empty() ? "PE icon: default icon retained"
                                           : "PE icon updated successfully");
 #else
     std::filesystem::permissions(
-        options.output,
+        staging,
         std::filesystem::perms::owner_exec | std::filesystem::perms::group_exec |
             std::filesystem::perms::others_exec,
         std::filesystem::perm_options::add, error);
@@ -201,7 +272,7 @@ void PackApplication(const PackOptions& options) {
     if (options.manifest.mode == AppMode::Local) {
       phase = "ZIP compression";
       Progress(options, "Compressing static resources");
-      zip = BuildZip(options);
+      zip = BuildZip(working);
       log.Info("Files: " + std::to_string(zip.file_count));
       log.Info("Source size: " + HumanBytes(zip.source_size));
       log.Info("Compressed size: " + HumanBytes(zip.compressed_size));
@@ -211,11 +282,16 @@ void PackApplication(const PackOptions& options) {
     }
     phase = "Manifest, SHA-256 and Payload append";
     Progress(options, "Appending payload and SHA-256");
-    AppendPayload(options.output, zip.path, manifest, flags);
-    const auto loaded = LoadPayload(options.output);
+    AppendPayload(staging, zip.path, manifest, flags);
+    const auto loaded = LoadPayload(staging);
     log.Info("Payload SHA-256: " + HexDigest(loaded.footer.sha256));
-    log.Info("Output: " + options.output.u8string());
     if (!zip.path.empty()) std::filesystem::remove(zip.path, error);
+
+    phase = "atomic output publication";
+    Progress(options, "Publishing output");
+    PublishCompletedFile(staging, options.output);
+    staging.clear();
+    log.Info("Output: " + options.output.u8string());
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started);
     log.Info("Packaging completed in " + std::to_string(elapsed.count()) + " ms");
@@ -231,10 +307,16 @@ void PackApplication(const PackOptions& options) {
       log.Error("Packaging failed with an unknown error");
       log.Flush();
     }
-    std::filesystem::remove(options.output, error);
-    auto temporary = options.output;
-    temporary += ".payload.tmp";
-    std::filesystem::remove(temporary, error);
+    // 失败只清理本次暂存文件，绝不删除用户原有的最终产物。
+    if (!staging.empty()) {
+      std::filesystem::remove(staging, error);
+      auto payload_temporary = staging;
+      payload_temporary += ".payload.tmp";
+      std::filesystem::remove(payload_temporary, error);
+      auto pe_backup = staging;
+      pe_backup += L".pe-resource-backup.tmp";
+      std::filesystem::remove(pe_backup, error);
+    }
     throw;
   }
 }

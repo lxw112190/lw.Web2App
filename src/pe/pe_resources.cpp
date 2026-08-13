@@ -10,8 +10,11 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <system_error>
+#include <thread>
 #include <vector>
 
 namespace lwweb {
@@ -48,13 +51,36 @@ struct GroupIconEntry {
 };
 #pragma pack(pop)
 
+// 保留 Win32 错误码，供外层区分参数错误与杀毒软件/资源管理器造成的短暂文件占用。
+class ResourceUpdateError final : public Error {
+ public:
+  ResourceUpdateError(const std::string& operation, DWORD code)
+      : Error(operation + " failed: " + WindowsErrorMessage(code)), code_(code) {}
+
+  DWORD code() const { return code_; }
+
+ private:
+  DWORD code_;
+};
+
+[[noreturn]] void ThrowResourceError(const char* operation) {
+  const auto code = GetLastError();
+  throw ResourceUpdateError(operation, code);
+}
+
+bool IsTransientResourceError(DWORD code) {
+  return code == ERROR_ACCESS_DENIED || code == ERROR_SHARING_VIOLATION ||
+         code == ERROR_LOCK_VIOLATION || code == ERROR_OPEN_FAILED ||
+         code == ERROR_USER_MAPPED_FILE || code == ERROR_RETRY;
+}
+
 // BeginUpdateResource/EndUpdateResource 的事务式 RAII 包装。
 // 未显式 Commit 时析构会丢弃本次资源更新，避免留下损坏的 PE。
 class ResourceUpdate {
  public:
   explicit ResourceUpdate(const std::filesystem::path& path) {
     handle_ = BeginUpdateResourceW(path.c_str(), FALSE);
-    if (!handle_) throw Error("BeginUpdateResource failed: " + WindowsErrorMessage(GetLastError()));
+    if (!handle_) ThrowResourceError("BeginUpdateResource");
   }
   ~ResourceUpdate() {
     if (handle_) EndUpdateResourceW(handle_, TRUE);
@@ -63,7 +89,7 @@ class ResourceUpdate {
   void Commit() {
     if (!EndUpdateResourceW(handle_, FALSE)) {
       handle_ = nullptr;
-      throw Error("EndUpdateResource failed: " + WindowsErrorMessage(GetLastError()));
+      ThrowResourceError("EndUpdateResource");
     }
     handle_ = nullptr;
   }
@@ -199,7 +225,7 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
                          MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                          const_cast<std::uint8_t*>(bytes.data()),
                          static_cast<DWORD>(bytes.size())))
-      throw Error("UpdateResource(PNG icon) failed");
+      ThrowResourceError("UpdateResource(PNG icon)");
     IconDirHeader header{0, 1, 1};
     GroupIconEntry entry{static_cast<std::uint8_t>(width == 256 ? 0 : width),
                          static_cast<std::uint8_t>(height == 256 ? 0 : height), 0, 0, 1, 32,
@@ -210,7 +236,7 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
     if (!UpdateResourceW(update, MAKEINTRESOURCEW(14), MAKEINTRESOURCEW(1),
                          MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), group.data(),
                          static_cast<DWORD>(group.size())))
-      throw Error("UpdateResource(PNG group icon) failed");
+      ThrowResourceError("UpdateResource(PNG group icon)");
     return;
   }
   if (extension != L".ico") throw Error("Icon must be a PNG or ICO file");
@@ -232,7 +258,7 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
     const auto id = static_cast<std::uint16_t>(i + 1);
     if (!UpdateResourceW(update, MAKEINTRESOURCEW(3), MAKEINTRESOURCEW(id), MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                          const_cast<std::uint8_t*>(bytes.data() + entry.offset), entry.size))
-      throw Error("UpdateResource(RT_ICON) failed");
+      ThrowResourceError("UpdateResource(RT_ICON)");
     GroupIconEntry group_entry{entry.width, entry.height, entry.color_count, entry.reserved,
                                entry.planes, entry.bit_count, entry.size, id};
     std::memcpy(group.data() + sizeof(header) + i * sizeof(group_entry), &group_entry,
@@ -241,7 +267,22 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
   if (!UpdateResourceW(update, MAKEINTRESOURCEW(14), MAKEINTRESOURCEW(1),
                        MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), group.data(),
                        static_cast<DWORD>(group.size())))
-    throw Error("UpdateResource(RT_GROUP_ICON) failed");
+    ThrowResourceError("UpdateResource(RT_GROUP_ICON)");
+}
+
+// 对一个干净的 PE 文件执行一次完整资源事务；失败后不能复用该事务句柄。
+void ApplyPeResources(const std::filesystem::path& executable,
+                      const PeMetadata& metadata) {
+  ResourceUpdate update(executable);
+  if (!metadata.product_name.empty() || !metadata.file_description.empty()) {
+    auto version = BuildVersionResource(metadata);
+    if (!UpdateResourceW(update.get(), MAKEINTRESOURCEW(16), MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), version.data(),
+                         static_cast<DWORD>(version.size())))
+      ThrowResourceError("UpdateResource(RT_VERSION)");
+  }
+  UpdateIcon(update.get(), metadata.icon);
+  update.Commit();
 }
 
 }  // namespace
@@ -252,16 +293,52 @@ void UpdatePeResources(const std::filesystem::path& executable,
       metadata.file_description.empty() && metadata.copyright.empty() &&
       metadata.icon.empty())
     return;
-  ResourceUpdate update(executable);
-  if (!metadata.product_name.empty() || !metadata.file_description.empty()) {
-    auto version = BuildVersionResource(metadata);
-    if (!UpdateResourceW(update.get(), MAKEINTRESOURCEW(16), MAKEINTRESOURCEW(1),
-                         MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), version.data(),
-                         static_cast<DWORD>(version.size())))
-      throw Error("UpdateResource(RT_VERSION) failed");
+  auto backup = executable;
+  backup += L".pe-resource-backup.tmp";
+  std::error_code file_error;
+  std::filesystem::remove(backup, file_error);
+  file_error.clear();
+  std::filesystem::copy_file(executable, backup,
+                             std::filesystem::copy_options::overwrite_existing,
+                             file_error);
+  if (file_error)
+    throw Error("Cannot create PE resource retry snapshot: " + file_error.message());
+
+  // EndUpdateResource 偶尔会与 Defender、资源管理器缩略图或刚关闭的同名程序竞争。
+  // 每次重试前恢复干净 Runner，避免在可能已被部分修改的 PE 上继续提交。
+  constexpr std::array<int, 3> retry_delays_ms = {75, 200, 500};
+  try {
+    for (std::size_t attempt = 0; attempt <= retry_delays_ms.size(); ++attempt) {
+      if (attempt != 0) {
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(retry_delays_ms[attempt - 1]));
+        file_error.clear();
+        std::filesystem::copy_file(backup, executable,
+                                   std::filesystem::copy_options::overwrite_existing,
+                                   file_error);
+        if (file_error) {
+          if (attempt < retry_delays_ms.size()) continue;
+          throw Error("Cannot restore PE before retry: " + file_error.message());
+        }
+      }
+      try {
+        ApplyPeResources(executable, metadata);
+        file_error.clear();
+        std::filesystem::remove(backup, file_error);
+        return;
+      } catch (const ResourceUpdateError& error) {
+        if (!IsTransientResourceError(error.code()) ||
+            attempt == retry_delays_ms.size()) {
+          throw Error(std::string(error.what()) +
+                      ". Automatic retries were exhausted; close any running output EXE, "
+                      "Explorer preview, or security scan and try again.");
+        }
+      }
+    }
+  } catch (...) {
+    std::filesystem::remove(backup, file_error);
+    throw;
   }
-  UpdateIcon(update.get(), metadata.icon);
-  update.Commit();
 }
 
 }  // namespace lwweb
