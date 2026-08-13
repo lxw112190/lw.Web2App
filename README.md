@@ -8,9 +8,12 @@
 
 > **平台状态：** 当前稳定实现仅支持 Windows 10/11 x64。Linux 是下一阶段的首要目标，计划复用跨平台 Payload、ZIP、Manifest、SHA-256、本地资源服务和缓存核心，并增加 Linux 原生窗口/WebView 与 ELF/AppImage 分发实现。当前版本不能在 Linux 上构建或运行，详见[跨平台规划](#跨平台规划)。
 
+<img src="docs/assets/lw.Web2App.png" alt="lw.Web2App Windows 图形界面" width="760">
+
 ## 功能特性
 
 - 原生 Win32 图形界面，同时提供 CLI。
+- 图形界面实时显示打包阶段和结果状态，状态区域采用独立重绘，连续更新时保持清晰。
 - 本地 HTML、Vue、React、Vite 静态目录打包为单个 EXE。
 - 在线 `http://`、`https://` 地址打包为单个 EXE。
 - 使用 WebView2 Evergreen Runtime，WebView2 Loader 静态链接进 EXE。

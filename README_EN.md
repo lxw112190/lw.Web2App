@@ -8,9 +8,12 @@ The target computer does not need Node.js, Rust, .NET, Electron, or a compiler t
 
 > **Platform status:** the stable implementation currently supports Windows 10/11 x64 only. Linux is the primary next milestone. The plan is to reuse the cross-platform payload, ZIP, manifest, SHA-256, local resource service, and cache core while adding a native Linux window/WebView layer and ELF/AppImage distribution. The current release cannot be built or run on Linux; see the [Cross-Platform Roadmap](#cross-platform-roadmap).
 
+<img src="docs/assets/lw.Web2App.png" alt="lw.Web2App graphical interface on Windows" width="760">
+
 ## Features
 
 - Modern native Win32 graphical interface and a scriptable CLI.
+- Live packaging-stage and result status in the GUI, with an independently repainted status area for clear rapid updates.
 - Package a local HTML, Vue, React, or Vite build directory into one EXE.
 - Package an online `http://` or `https://` URL into one EXE.
 - WebView2 Evergreen Runtime with the WebView2 Loader statically linked.

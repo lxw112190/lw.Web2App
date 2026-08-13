@@ -92,7 +92,8 @@ jobs:
           New-Item -ItemType Directory -Force dist/lw.Web2App/third_party/licenses | Out-Null
           Copy-Item build/Release/lw.Web2App.exe dist/lw.Web2App/
           Copy-Item README.md, README_EN.md, LICENSE, THIRD_PARTY_NOTICES.md dist/lw.Web2App/
-          Copy-Item docs/assets/sponsor.jpg dist/lw.Web2App/docs/assets/
+          Copy-Item docs/assets/sponsor.jpg, docs/assets/lw.Web2App.png `
+            dist/lw.Web2App/docs/assets/
           Copy-Item third_party/licenses/* dist/lw.Web2App/third_party/licenses/
           $checksums = @(
             'dist/lw.Web2App/lw.Web2App.exe',

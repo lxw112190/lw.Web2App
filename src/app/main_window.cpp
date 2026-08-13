@@ -46,7 +46,6 @@ enum ControlId {
   kOutput,
   kBrowseOutput,
   kPack,
-  kStatus,
   kSourceLabel,
   kModeHint,
 };
@@ -61,8 +60,11 @@ struct State {
   HFONT small_font = nullptr;
   HBRUSH background_brush = nullptr;
   HBRUSH card_brush = nullptr;
+  std::wstring status = L"准备就绪 · 请选择网页目录和输出位置";
   bool busy = false;
 };
+
+constexpr RECT kStatusRect{48, 731, 712, 757};
 
 HFONT MakeFont(int height, int weight) {
   return CreateFontW(-height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
@@ -163,10 +165,13 @@ std::wstring LocalizeProgress(const std::string& message) {
 }
 
 void SetStatus(HWND window, const std::wstring& text) {
-  const auto status = GetDlgItem(window, kStatus);
-  SetWindowTextW(status, text.c_str());
-  RedrawWindow(status, nullptr, nullptr,
-               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+  auto* state = reinterpret_cast<State*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (!state) return;
+  state->status = text;
+  // 状态由父窗口统一绘制；擦除并同步刷新完整固定区域，避免透明 STATIC
+  // 和嵌套消息泵在快速更新时保留旧字形。
+  RedrawWindow(window, &kStatusRect, nullptr,
+               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
 }
 
 void UpdateMode(HWND window) {
@@ -331,8 +336,6 @@ void BuildInterface(State& state) {
   AddButton(state, L"选择位置", 610, 595, 102, 34, kBrowseOutput);
 
   AddButton(state, L"生成 Windows EXE", 48, 668, 664, 48, kPack);
-  AddLabel(state, L"准备就绪 · 请选择网页目录和输出位置", 48, 731, 664, 26,
-           kStatus, state.small_font);
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -392,15 +395,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       const auto dc = reinterpret_cast<HDC>(wparam);
       const auto control = reinterpret_cast<HWND>(lparam);
       const auto id = GetDlgCtrlID(control);
-      if (id == kStatus && state) {
-        SetBkMode(dc, OPAQUE);
-        SetBkColor(dc, kBackground);
-        SetTextColor(dc, kSuccess);
-        return reinterpret_cast<INT_PTR>(state->background_brush);
-      }
       SetBkMode(dc, TRANSPARENT);
-      SetTextColor(dc, id == kStatus ? kSuccess :
-                       (id == kModeHint ? kMuted : kText));
+      SetTextColor(dc, id == kModeHint ? kMuted : kText);
       return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
     }
     case WM_CTLCOLORBTN: {
@@ -424,6 +420,18 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       DeleteObject(header_brush);
       DrawRoundedPanel(dc, RECT{28, 109, 732, 286}, kCard, kBorder, 18);
       DrawRoundedPanel(dc, RECT{28, 296, 732, 648}, kCard, kBorder, 18);
+      if (state) {
+        // 永远先覆盖整个状态区域，再绘制一次当前文本。
+        FillRect(dc, &kStatusRect, state->background_brush);
+        SetBkMode(dc, OPAQUE);
+        SetBkColor(dc, kBackground);
+        SetTextColor(dc, kSuccess);
+        SelectObject(dc, state->small_font);
+        auto status_rect = kStatusRect;
+        DrawTextW(dc, state->status.c_str(), -1, &status_rect,
+                  DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
+                      DT_NOPREFIX);
+      }
       EndPaint(window, &paint);
       return 0;
     }
