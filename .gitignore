@@ -2,6 +2,7 @@
 /build-ninja/
 /build-audit/
 /.deps/
+/.test-work/
 /out/
 /dist/
 /integration/

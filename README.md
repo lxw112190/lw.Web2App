@@ -8,7 +8,13 @@
 
 > **平台状态：** Windows 10/11 x64 为稳定版；Ubuntu 22.04/24.04 x86_64 为首个 Linux Beta。Linux 已实现 GTK3 图形打包器、CLI、ELF Runner、WebKitGTK Runtime、单文件 Payload、日志及 `.deb`/`.tar.gz` CI 产物。当前不支持其他发行版、ARM64、AppImage 或 RPM。
 
-<img src="docs/assets/lw.Web2App.png" alt="lw.Web2App Windows 图形界面" width="760">
+Windows 图形打包器：
+
+<img src="docs/assets/lw.Web2App.png" alt="lw.Web2App Windows 图形打包器" width="760">
+
+Linux 图形打包器（Ubuntu 22.04）：
+
+<img src="docs/assets/lw.Web2App-linux.png" alt="lw.Web2App Linux 图形打包器" width="760">
 
 ## 功能特性
 
@@ -24,7 +30,7 @@
 - 只索引 ZIP 中央目录，请求资源时才解压对应文件，不会启动即展开全部内容。
 - 32 MiB LRU 缓存小型热点资源，大文件不长期驻留内存。
 - 支持 Vue Router、React Router 等 history 模式所需的 SPA fallback。
-- 本地 HTTP 服务仅监听 `127.0.0.1` 随机端口。
+- 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 使用稳定的应用专属动态端口，以保持 LocalStorage/IndexedDB origin 跨重启不变。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
 - 拒绝绝对路径、盘符、`..`、NUL、重复 ZIP 路径。
 - 限制资源数量、单文件大小和总解压大小，降低 ZIP 炸弹风险。
@@ -43,16 +49,16 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 4. **构建 ZIP**：递归读取静态目录，将规范化后的相对路径流式压缩到临时 ZIP 文件，避免把源文件和完整 ZIP 同时驻留内存。绝对路径、盘符、`..`、NUL 和重复路径会被拒绝。
 5. **追加容器**：依次在 PE/ELF 文件尾部流式写入资源 ZIP、Manifest JSON 和固定 80 字节 Footer。V2 Footer 记录格式版本、标志、各区段偏移/长度，以及“资源 ZIP + Manifest”的联合 SHA-256。
 
-在线 URL 模式不保存远端网站内容，ZIP 为空；Manifest 只记录目标 URL 和窗口配置，启动时直接导航到该地址。因此在线模式需要联网，页面变化也会随网站实时变化。
+在线 URL 模式不保存远端网站内容，ZIP 为空；Manifest 只记录目标 URL 和窗口配置，启动时直接导航到该地址。因此在线模式需要联网，页面变化也会随网站实时变化。Linux Runtime 会将 `http_proxy`、`https_proxy`、`all_proxy` 和 `no_proxy`（同时兼容大写形式）传递给 WebKitGTK。
 
 ### 运行阶段
 
 1. 程序从自身末尾读取 `LWWEB002` Footer；没有 Footer 时显示当前平台的打包器界面，有 Footer 时进入生成应用模式，同时仍可读取旧版 `LWWEB001`。
 2. Runner 检查所有偏移和长度是否位于当前 PE/ELF 文件内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。校验失败时拒绝打开嵌入内容。
 3. 本地模式只读取 ZIP 中央目录建立索引，不会把网站完整解压到磁盘或一次性载入内存。
-4. Runner 在 `127.0.0.1` 随机端口启动仅供本进程页面访问的 HTTP 服务，严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback。
+4. Runner 在 `127.0.0.1` 的应用专属稳定动态端口启动 HTTP 服务，严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback。稳定端口让 LocalStorage/IndexedDB 在重启后继续使用同一 origin；同一应用当前只允许一个运行实例。
 5. 小型热点资源进入 32 MiB LRU 缓存；大文件按请求读取，不长期占用内存。
-6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。两端都导航到本地随机地址或在线 URL，窗口标题、尺寸、是否可调整、默认全屏和开发者工具策略来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
+6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。两端都导航到本地应用专属地址或在线 URL，窗口标题、尺寸、是否可调整、默认全屏和开发者工具策略来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
 7. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
 
 SHA-256 用于发现资源损坏或修改，不等同于发布者认证；Manifest 配置和整个 EXE 的可信发布仍应依靠 Authenticode 等代码签名机制。
@@ -144,7 +150,7 @@ Linux Artifact 额外包含 lw.Web2App 的 `.deb`、便携 `.tar.gz`、生成的
 构建环境：
 
 - Visual Studio 2022，安装“使用 C++ 的桌面开发”工作负载
-- CMake 3.24+
+- CMake 3.22+
 - 首次配置时可以访问依赖下载地址
 
 ```powershell
@@ -277,7 +283,7 @@ Footer             固定 80 字节
 - 默认单文件最大 512 MiB。
 - 默认总解压大小最大 2 GiB。
 - Manifest 最大 1 MiB。
-- HTTP 服务仅绑定 IPv4 loopback，且必须提供精确随机端口 Host。
+- HTTP 服务仅绑定 IPv4 loopback，且必须提供精确的应用专属端口 Host。
 - SHA-256 可以检测损坏或修改，但不能验证发布者身份；数字签名属于后续规划。
 
 ## 项目结构

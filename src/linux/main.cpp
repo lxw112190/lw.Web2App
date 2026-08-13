@@ -10,6 +10,7 @@
 #include <webkit2/webkit2.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -39,6 +40,54 @@ std::filesystem::path XdgPath(const char* variable, const char* fallback) {
   const auto* home = std::getenv("HOME");
   if (!home || !*home) throw Error("HOME is not defined");
   return std::filesystem::path(home) / fallback;
+}
+
+const char* FirstEnvironmentValue(const std::vector<const char*>& names) {
+  for (const auto* name : names) {
+    if (const auto* value = std::getenv(name); value && *value) return value;
+  }
+  return nullptr;
+}
+
+std::vector<std::string> ProxyIgnoreHosts() {
+  const auto* value = FirstEnvironmentValue({"no_proxy", "NO_PROXY"});
+  if (!value) return {};
+  std::vector<std::string> hosts;
+  std::string list(value);
+  for (std::size_t begin = 0; begin <= list.size();) {
+    const auto comma = list.find(',', begin);
+    const auto end = comma == std::string::npos ? list.size() : comma;
+    auto first = begin;
+    while (first < end && std::isspace(static_cast<unsigned char>(list[first]))) ++first;
+    auto last = end;
+    while (last > first && std::isspace(static_cast<unsigned char>(list[last - 1]))) --last;
+    if (last > first) hosts.emplace_back(list.substr(first, last - first));
+    if (comma == std::string::npos) break;
+    begin = comma + 1;
+  }
+  return hosts;
+}
+
+void ConfigureEnvironmentProxy(WebKitWebsiteDataManager* manager, Logger& logger) {
+  const auto* all_proxy = FirstEnvironmentValue({"all_proxy", "ALL_PROXY"});
+  const auto* http_proxy = FirstEnvironmentValue({"http_proxy", "HTTP_PROXY"});
+  const auto* https_proxy = FirstEnvironmentValue({"https_proxy", "HTTPS_PROXY"});
+  if (!all_proxy && !http_proxy && !https_proxy) return;
+  const auto ignore_hosts = ProxyIgnoreHosts();
+  std::vector<const char*> ignore_host_pointers;
+  ignore_host_pointers.reserve(ignore_hosts.size() + 1);
+  for (const auto& host : ignore_hosts) ignore_host_pointers.push_back(host.c_str());
+  ignore_host_pointers.push_back(nullptr);
+  auto* settings = webkit_network_proxy_settings_new(
+      all_proxy, ignore_hosts.empty() ? nullptr : ignore_host_pointers.data());
+  if (http_proxy)
+    webkit_network_proxy_settings_add_proxy_for_scheme(settings, "http", http_proxy);
+  if (https_proxy)
+    webkit_network_proxy_settings_add_proxy_for_scheme(settings, "https", https_proxy);
+  webkit_website_data_manager_set_network_proxy_settings(
+      manager, WEBKIT_NETWORK_PROXY_MODE_CUSTOM, settings);
+  webkit_network_proxy_settings_free(settings);
+  logger.Info("WebKitGTK proxy configured from environment");
 }
 
 std::string DefaultOutputPath() {
@@ -201,6 +250,7 @@ int RunPayloadApp(const LoadedPayload& payload) {
   auto* data_manager = webkit_website_data_manager_new(
       "base-data-directory", data_dir.c_str(), "base-cache-directory", cache_dir.c_str(),
       nullptr);
+  if (payload.manifest.mode == AppMode::Url) ConfigureEnvironmentProxy(data_manager, logger);
   auto* context = webkit_web_context_new_with_website_data_manager(data_manager);
   auto* content = webkit_user_content_manager_new();
   webkit_user_content_manager_register_script_message_handler(content, "lwWebError");

@@ -1,6 +1,10 @@
-cmake_minimum_required(VERSION 3.24)
+cmake_minimum_required(VERSION 3.22)
 
 project(lw.Web2App VERSION 0.1.0 LANGUAGES C CXX)
+
+if(POLICY CMP0135)
+  cmake_policy(SET CMP0135 NEW)
+endif()
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
   message(FATAL_ERROR "lw.Web2App currently supports x64 builds only")
@@ -40,6 +44,8 @@ set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZSTD_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_INSTALL OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_TEST OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(cpp_httplib)
 
 if(EXISTS "${LWWEB_DEPS_CACHE}/miniz.tar.gz")
@@ -100,7 +106,8 @@ add_library(lwweb_core STATIC
   src/packer/packer.cpp
   src/runtime/resource_cache.cpp
   src/runtime/resource_server.cpp)
-target_include_directories(lwweb_core PUBLIC include PRIVATE ${miniz_SOURCE_DIR})
+target_include_directories(lwweb_core PUBLIC include)
+target_include_directories(lwweb_core SYSTEM PRIVATE ${miniz_SOURCE_DIR})
 target_link_libraries(lwweb_core PUBLIC
   nlohmann_json::nlohmann_json
   httplib::httplib
@@ -139,6 +146,10 @@ if(MSVC)
 else()
   target_compile_options(lwweb_core PRIVATE -Wall -Wextra -Wpedantic)
   target_compile_options(lwweb PRIVATE -Wall -Wextra -Wpedantic)
+  # miniz exposes optional zlib-compatible helpers as static functions in its
+  # public header. GCC reports those helpers as unused in every translation
+  # unit that includes it, even though lw.Web2App only uses the ZIP API.
+  target_compile_options(miniz PRIVATE -Wno-unused-function)
 endif()
 set_target_properties(lwweb PROPERTIES OUTPUT_NAME "lw.Web2App")
 
@@ -147,6 +158,8 @@ if(UNIX AND NOT APPLE)
   install(FILES resources/linux/lw.Web2App.desktop DESTINATION share/applications)
   install(FILES resources/linux/lw.Web2App.svg DESTINATION share/icons/hicolor/scalable/apps)
   install(FILES README.md README_EN.md DESTINATION share/doc/lw-web2app)
+  install(FILES docs/assets/lw.Web2App.png docs/assets/lw.Web2App-linux.png
+          DESTINATION share/doc/lw-web2app/docs/assets)
 
   set(CPACK_GENERATOR "DEB;TGZ")
   set(CPACK_PACKAGE_NAME "lw-web2app")

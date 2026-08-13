@@ -92,7 +92,8 @@ jobs:
           New-Item -ItemType Directory -Force dist/lw.Web2App/third_party/licenses | Out-Null
           Copy-Item build/Release/lw.Web2App.exe dist/lw.Web2App/
           Copy-Item README.md, README_EN.md, LICENSE, THIRD_PARTY_NOTICES.md dist/lw.Web2App/
-          Copy-Item docs/assets/sponsor.jpg, docs/assets/lw.Web2App.png `
+          Copy-Item docs/assets/sponsor.jpg, docs/assets/lw.Web2App.png, `
+            docs/assets/lw.Web2App-linux.png `
             dist/lw.Web2App/docs/assets/
           Copy-Item third_party/licenses/* dist/lw.Web2App/third_party/licenses/
           $checksums = @(
@@ -201,7 +202,8 @@ jobs:
           mkdir -p dist/lw.Web2App/docs/assets dist/lw.Web2App/third_party/licenses
           cp build/lw.Web2App dist/lw.Web2App/
           cp README.md README_EN.md LICENSE THIRD_PARTY_NOTICES.md dist/lw.Web2App/
-          cp docs/assets/sponsor.jpg docs/assets/lw.Web2App.png dist/lw.Web2App/docs/assets/
+          cp docs/assets/sponsor.jpg docs/assets/lw.Web2App.png \
+            docs/assets/lw.Web2App-linux.png dist/lw.Web2App/docs/assets/
           cp third_party/licenses/* dist/lw.Web2App/third_party/licenses/
           cpack --config build/CPackConfig.cmake -G DEB -B dist/packages
           cpack --config build/CPackConfig.cmake -G TGZ -B dist/packages

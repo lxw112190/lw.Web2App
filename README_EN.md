@@ -8,7 +8,13 @@ The target computer does not need Node.js, Rust, .NET, Electron, or a compiler t
 
 > **Platform status:** Windows 10/11 x64 is stable. Ubuntu 22.04/24.04 x86_64 is the first Linux Beta, with a GTK3 GUI, CLI, ELF Runner, WebKitGTK Runtime, single-file payload, logs, and CI-built `.deb`/`.tar.gz` packages. Other distributions, ARM64, AppImage, and RPM are not supported yet.
 
-<img src="docs/assets/lw.Web2App.png" alt="lw.Web2App graphical interface on Windows" width="760">
+Windows graphical packager:
+
+<img src="docs/assets/lw.Web2App.png" alt="lw.Web2App graphical packager on Windows" width="760">
+
+Linux graphical packager (Ubuntu 22.04):
+
+<img src="docs/assets/lw.Web2App-linux.png" alt="lw.Web2App graphical packager on Linux" width="760">
 
 ## Features
 
@@ -24,7 +30,7 @@ The target computer does not need Node.js, Rust, .NET, Electron, or a compiler t
 - ZIP central-directory indexing and per-request decompression instead of eager extraction.
 - A 32 MiB LRU cache for small hot resources; large files do not remain in memory.
 - SPA fallback for history-mode Vue Router and React Router applications.
-- Local HTTP service bound only to a random `127.0.0.1` port.
+- The local HTTP service binds only to `127.0.0.1` and uses a stable per-`app_id` dynamic port so the LocalStorage/IndexedDB origin survives restarts.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
 - Limits for entry count, individual file size, and total uncompressed size.
 - PNG/ICO application icons and complete Windows PE version metadata.
@@ -42,14 +48,14 @@ lw.Web2App creates a single-file application using a **platform Runner plus an e
 4. **Build the ZIP**: files are streamed into a temporary ZIP under normalized relative paths, avoiding simultaneous in-memory copies of the source and complete archive. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
 5. **Append the container**: the ZIP, Manifest JSON, and fixed 80-byte footer are streamed onto the PE/ELF file. The V2 footer stores the format, flags, section offsets/lengths, and a combined SHA-256 of ZIP plus manifest.
 
-Online URL mode does not snapshot or embed the remote website. Its ZIP is empty and the manifest records only the target URL and window settings. The generated application therefore requires network access and follows future changes to that website.
+Online URL mode does not snapshot or embed the remote website. Its ZIP is empty and the manifest records only the target URL and window settings. The generated application therefore requires network access and follows future changes to that website. On Linux, the runtime passes `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` (including their uppercase forms) to WebKitGTK.
 
 ### Runtime
 
 1. The executable reads the `LWWEB002` footer from its own end. Without a footer it opens the packager; with a footer it enters generated-application mode. Legacy `LWWEB001` packages remain readable.
 2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP plus manifest. It refuses to open embedded content when validation fails.
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
-4. A private HTTP service starts on a random `127.0.0.1` port. It validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback when configured.
+4. A private HTTP service starts on a stable per-app dynamic port at `127.0.0.1`. It validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback when configured. The stable port preserves the LocalStorage/IndexedDB origin across restarts; only one instance of the same app can currently run at a time.
 5. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
 6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Both navigate to the private local address or online URL and honor title, dimensions, resizing, fullscreen, and developer-tool settings. `F11` toggles fullscreen and `Esc` exits it.
 7. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
@@ -143,7 +149,7 @@ This example exercises a real Vite/React build, a Chinese title, a non-trivial a
 Requirements:
 
 - Visual Studio 2022 with the **Desktop development with C++** workload
-- CMake 3.24+
+- CMake 3.22+
 - Internet access during the first configure, unless a dependency cache is provided
 
 ```powershell
@@ -270,7 +276,7 @@ This project packages trusted static web applications. It is not a sandbox for h
 - Default maximum individual file size: 512 MiB.
 - Default maximum total uncompressed size: 2 GiB.
 - Maximum manifest size: 1 MiB.
-- The HTTP service listens only on IPv4 loopback and requires the exact randomized Host value.
+- The HTTP service listens only on IPv4 loopback and requires the exact per-app port Host value.
 - SHA-256 detects corruption or modification but does not authenticate a publisher. Digital signatures are planned separately.
 
 ## Project Layout

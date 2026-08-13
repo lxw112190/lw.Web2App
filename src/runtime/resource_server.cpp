@@ -13,6 +13,17 @@
 
 namespace lwweb {
 
+std::uint16_t StableAppPort(const std::string& app_id) {
+  // Stable FNV-1a avoids std::hash's implementation-defined result while
+  // distributing applications across the complete private port range.
+  std::uint32_t hash = 2166136261u;
+  for (const auto value : app_id) {
+    hash ^= static_cast<unsigned char>(value);
+    hash *= 16777619u;
+  }
+  return static_cast<std::uint16_t>(49152u + (hash & 0x3fffu));
+}
+
 // ZipResourceStore 的私有实现，负责 miniz 回调、宽路径文件流、索引和缓存。
 struct ZipResourceStore::Impl {
   LoadedPayload payload;
@@ -159,8 +170,10 @@ std::string ResourceServer::Start() {
       response.status = 500;
     }
   });
-  port_ = server_->bind_to_any_port("127.0.0.1");
-  if (port_ <= 0) throw Error("Cannot bind the local resource server");
+  port_ = StableAppPort(EffectiveAppId(payload_.manifest));
+  if (!server_->bind_to_port("127.0.0.1", port_))
+    throw Error("Cannot bind the stable local resource server port " +
+                std::to_string(port_) + "; another instance may already be running");
   thread_ = std::thread([this] { server_->listen_after_bind(); });
   if (logger_) logger_->Info("Resource server: 127.0.0.1:" + std::to_string(port_));
   return "http://127.0.0.1:" + std::to_string(port_) + "/";

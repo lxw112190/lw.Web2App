@@ -7,5 +7,5 @@ Comment[zh_CN]=将静态网站打包为原生桌面应用
 Exec=lw.Web2App
 Icon=lw.Web2App
 Terminal=false
-Categories=Development;Utility;
+Categories=Development;
 StartupNotify=true

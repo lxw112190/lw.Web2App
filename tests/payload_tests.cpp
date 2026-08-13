@@ -3,6 +3,7 @@
 #include "lwweb/common/logging.h"
 #include "lwweb/runtime/resource_server.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
@@ -15,12 +16,31 @@ void Check(bool condition, const char* message) {
 }
 
 void RunPayloadTests() {
-  const auto log_file = std::filesystem::temp_directory_path() / "lwweb-logging-test" /
-                        "app.log";
-  auto logger = lwweb::Logger::Rotating("lwweb-test", log_file, {});
-  logger.Info("logging smoke test");
-  logger.Flush();
+  const auto unique = std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto log_file = std::filesystem::temp_directory_path() /
+                        ("lwweb-logging-test-" + unique) / "app.log";
+  lwweb::LoggingConfig rotation;
+  rotation.max_file_size = 64 * 1024;
+  rotation.max_files = 2;
+  {
+    auto logger = lwweb::Logger::Rotating("lwweb-test", log_file, rotation);
+    for (int i = 0; i < 3000; ++i)
+      logger.Info("rotation smoke test payload 0123456789012345678901234567890123456789");
+    logger.Flush();
+  }
   Check(std::filesystem::is_regular_file(log_file), "rotating logger writes a file");
+  const auto rotated1 = log_file.parent_path() / "app.1.log";
+  const auto rotated2 = log_file.parent_path() / "app.2.log";
+  const auto rotated3 = log_file.parent_path() / "app.3.log";
+  Check(std::filesystem::is_regular_file(rotated1),
+        "rotating logger creates the first archive");
+  Check(std::filesystem::is_regular_file(rotated2),
+        "rotating logger retains the configured archive count");
+  Check(!std::filesystem::exists(rotated3),
+        "rotating logger does not exceed the configured archive count");
+  Check(std::filesystem::file_size(log_file) <= rotation.max_file_size,
+        "current rotating log respects its size limit");
   lwweb::PayloadFooter input;
   input.flags = lwweb::kPayloadHasZip;
   input.payload_offset = 0x0123456789ABCDEFu;
@@ -64,6 +84,12 @@ void RunPayloadTests() {
         "runtime log rotation size");
   Check(loaded.manifest.logging.max_files == 5, "runtime log rotation count");
   Check(lwweb::IsValidAppId(loaded.manifest.app_id), "generated app ID is valid");
+  const auto stable_port = lwweb::StableAppPort(loaded.manifest.app_id);
+  Check(stable_port >= 49152, "stable app port uses the private range");
+  Check(stable_port == lwweb::StableAppPort(loaded.manifest.app_id),
+        "stable app port is deterministic");
+  Check(stable_port != lwweb::StableAppPort("app-a-different-id"),
+        "different app IDs distribute across ports");
   lwweb::ZipResourceStore store(loaded);
   Check(store.Exists("index.html"), "ZIP index includes entry");
   Check(store.Exists("assets/app.css"), "ZIP index includes asset");
