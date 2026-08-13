@@ -1,0 +1,16 @@
+/build/
+/build-ninja/
+/build-audit/
+/.deps/
+/out/
+/dist/
+/integration/
+/.vs/
+/.idea/
+*.user
+*.suo
+*.VC.db
+*.exe
+*.pdb
+*.ilk
+*.log

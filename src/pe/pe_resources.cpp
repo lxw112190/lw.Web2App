@@ -1,0 +1,267 @@
+#include "lwweb/pe/pe_resources.h"
+
+#include "lwweb/common/error.h"
+#include "lwweb/common/file_utils.h"
+
+#include <Windows.h>
+#include <wincodec.h>
+#include <wrl/client.h>
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstdint>
+#include <cstring>
+#include <vector>
+
+namespace lwweb {
+namespace {
+
+#pragma pack(push, 2)
+// ICO 文件的目录头，布局由 Windows 图标文件格式规定。
+struct IconDirHeader {
+  std::uint16_t reserved;
+  std::uint16_t type;
+  std::uint16_t count;
+};
+// ICO 文件中每张图像的位置与像素格式描述。
+struct IconDirEntry {
+  std::uint8_t width;
+  std::uint8_t height;
+  std::uint8_t color_count;
+  std::uint8_t reserved;
+  std::uint16_t planes;
+  std::uint16_t bit_count;
+  std::uint32_t size;
+  std::uint32_t offset;
+};
+// 写入 RT_GROUP_ICON 的图像目录项；id 指向独立 RT_ICON 资源。
+struct GroupIconEntry {
+  std::uint8_t width;
+  std::uint8_t height;
+  std::uint8_t color_count;
+  std::uint8_t reserved;
+  std::uint16_t planes;
+  std::uint16_t bit_count;
+  std::uint32_t size;
+  std::uint16_t id;
+};
+#pragma pack(pop)
+
+// BeginUpdateResource/EndUpdateResource 的事务式 RAII 包装。
+// 未显式 Commit 时析构会丢弃本次资源更新，避免留下损坏的 PE。
+class ResourceUpdate {
+ public:
+  explicit ResourceUpdate(const std::filesystem::path& path) {
+    handle_ = BeginUpdateResourceW(path.c_str(), FALSE);
+    if (!handle_) throw Error("BeginUpdateResource failed: " + WindowsErrorMessage(GetLastError()));
+  }
+  ~ResourceUpdate() {
+    if (handle_) EndUpdateResourceW(handle_, TRUE);
+  }
+  HANDLE get() const { return handle_; }
+  void Commit() {
+    if (!EndUpdateResourceW(handle_, FALSE)) {
+      handle_ = nullptr;
+      throw Error("EndUpdateResource failed: " + WindowsErrorMessage(GetLastError()));
+    }
+    handle_ = nullptr;
+  }
+ private:
+  HANDLE handle_ = nullptr;
+};
+
+void AppendWord(std::vector<std::uint8_t>& out, std::uint16_t value) {
+  out.push_back(static_cast<std::uint8_t>(value));
+  out.push_back(static_cast<std::uint8_t>(value >> 8));
+}
+void AppendDword(std::vector<std::uint8_t>& out, std::uint32_t value) {
+  AppendWord(out, static_cast<std::uint16_t>(value));
+  AppendWord(out, static_cast<std::uint16_t>(value >> 16));
+}
+void AppendWide(std::vector<std::uint8_t>& out, const std::wstring& text) {
+  for (wchar_t ch : text) AppendWord(out, static_cast<std::uint16_t>(ch));
+  AppendWord(out, 0);
+}
+void Align4(std::vector<std::uint8_t>& out) {
+  while (out.size() % 4) out.push_back(0);
+}
+void PatchWord(std::vector<std::uint8_t>& out, std::size_t at, std::uint16_t value) {
+  out.at(at) = static_cast<std::uint8_t>(value);
+  out.at(at + 1) = static_cast<std::uint8_t>(value >> 8);
+}
+
+std::array<std::uint16_t, 4> ParseVersion(const std::wstring& text) {
+  std::array<std::uint16_t, 4> value{};
+  std::size_t start = 0;
+  for (std::size_t i = 0; i < value.size(); ++i) {
+    const auto end = text.find(L'.', start);
+    const auto part = text.substr(start, end == std::wstring::npos ? end : end - start);
+    if (part.empty()) throw Error("Version must look like 1.2.3.4");
+    unsigned parsed = 0;
+    for (wchar_t c : part) {
+      if (c < L'0' || c > L'9') throw Error("Version must contain only numbers and dots");
+      parsed = parsed * 10 + (c - L'0');
+      if (parsed > 65535) throw Error("A version component exceeds 65535");
+    }
+    value[i] = static_cast<std::uint16_t>(parsed);
+    if (end == std::wstring::npos) break;
+    start = end + 1;
+  }
+  return value;
+}
+
+std::size_t BeginBlock(std::vector<std::uint8_t>& out, const std::wstring& key,
+                       std::uint16_t value_length, std::uint16_t type) {
+  const auto start = out.size();
+  AppendWord(out, 0);
+  AppendWord(out, value_length);
+  AppendWord(out, type);
+  AppendWide(out, key);
+  Align4(out);
+  return start;
+}
+void EndBlock(std::vector<std::uint8_t>& out, std::size_t start) {
+  const auto length = out.size() - start;
+  if (length > 65535) throw Error("Version resource is too large");
+  PatchWord(out, start, static_cast<std::uint16_t>(length));
+}
+
+std::vector<std::uint8_t> BuildVersionResource(const PeMetadata& metadata) {
+  const auto version = ParseVersion(metadata.version);
+  std::vector<std::uint8_t> out;
+  const auto root = BeginBlock(out, L"VS_VERSION_INFO", sizeof(VS_FIXEDFILEINFO), 0);
+  VS_FIXEDFILEINFO fixed{};
+  fixed.dwSignature = 0xFEEF04BD;
+  fixed.dwStrucVersion = 0x00010000;
+  fixed.dwFileVersionMS = MAKELONG(version[1], version[0]);
+  fixed.dwFileVersionLS = MAKELONG(version[3], version[2]);
+  fixed.dwProductVersionMS = fixed.dwFileVersionMS;
+  fixed.dwProductVersionLS = fixed.dwFileVersionLS;
+  fixed.dwFileFlagsMask = VS_FFI_FILEFLAGSMASK;
+  fixed.dwFileOS = VOS_NT_WINDOWS32;
+  fixed.dwFileType = VFT_APP;
+  const auto* fixed_bytes = reinterpret_cast<const std::uint8_t*>(&fixed);
+  out.insert(out.end(), fixed_bytes, fixed_bytes + sizeof(fixed));
+  Align4(out);
+
+  const auto strings = BeginBlock(out, L"StringFileInfo", 0, 1);
+  const auto table = BeginBlock(out, L"040904B0", 0, 1);
+  const std::array<std::pair<std::wstring, std::wstring>, 7> values = {{
+      {L"CompanyName", metadata.company_name},
+      {L"FileDescription", metadata.file_description},
+      {L"FileVersion", metadata.version},
+      {L"LegalCopyright", metadata.copyright},
+      {L"ProductName", metadata.product_name},
+      {L"ProductVersion", metadata.version},
+      {L"OriginalFilename", L"application.exe"}}};
+  for (const auto& [key, value] : values) {
+    const auto block = BeginBlock(out, key, static_cast<std::uint16_t>(value.size() + 1), 1);
+    AppendWide(out, value);
+    Align4(out);
+    EndBlock(out, block);
+  }
+  EndBlock(out, table);
+  EndBlock(out, strings);
+
+  const auto vars = BeginBlock(out, L"VarFileInfo", 0, 1);
+  const auto translation = BeginBlock(out, L"Translation", 4, 0);
+  AppendWord(out, 0x0409);
+  AppendWord(out, 1200);
+  Align4(out);
+  EndBlock(out, translation);
+  EndBlock(out, vars);
+  EndBlock(out, root);
+  return out;
+}
+
+void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
+  if (path.empty()) return;
+  auto extension = path.extension().wstring();
+  std::transform(extension.begin(), extension.end(), extension.begin(),
+                 [](wchar_t ch) { return static_cast<wchar_t>(towlower(ch)); });
+  if (extension == L".png") {
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+                                IID_PPV_ARGS(&factory))))
+      throw Error("Cannot initialize Windows Imaging Component");
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromFilename(path.c_str(), nullptr, GENERIC_READ,
+                                                  WICDecodeMetadataCacheOnDemand, &decoder)))
+      throw Error("Cannot decode PNG icon");
+    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+    UINT width = 0, height = 0;
+    if (FAILED(decoder->GetFrame(0, &frame)) || FAILED(frame->GetSize(&width, &height)) ||
+        width == 0 || height == 0 || width > 256 || height > 256)
+      throw Error("PNG icon dimensions must be between 1 and 256 pixels");
+    const auto bytes = ReadFileBytes(path);
+    if (!UpdateResourceW(update, MAKEINTRESOURCEW(3), MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                         const_cast<std::uint8_t*>(bytes.data()),
+                         static_cast<DWORD>(bytes.size())))
+      throw Error("UpdateResource(PNG icon) failed");
+    IconDirHeader header{0, 1, 1};
+    GroupIconEntry entry{static_cast<std::uint8_t>(width == 256 ? 0 : width),
+                         static_cast<std::uint8_t>(height == 256 ? 0 : height), 0, 0, 1, 32,
+                         static_cast<std::uint32_t>(bytes.size()), 1};
+    std::vector<std::uint8_t> group(sizeof(header) + sizeof(entry));
+    std::memcpy(group.data(), &header, sizeof(header));
+    std::memcpy(group.data() + sizeof(header), &entry, sizeof(entry));
+    if (!UpdateResourceW(update, MAKEINTRESOURCEW(14), MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), group.data(),
+                         static_cast<DWORD>(group.size())))
+      throw Error("UpdateResource(PNG group icon) failed");
+    return;
+  }
+  if (extension != L".ico") throw Error("Icon must be a PNG or ICO file");
+  const auto bytes = ReadFileBytes(path);
+  if (bytes.size() < sizeof(IconDirHeader)) throw Error("ICO file is truncated");
+  IconDirHeader header{};
+  std::memcpy(&header, bytes.data(), sizeof(header));
+  if (header.reserved != 0 || header.type != 1 || header.count == 0 || header.count > 64)
+    throw Error("ICO header is invalid");
+  const auto directory_size = sizeof(header) + sizeof(IconDirEntry) * header.count;
+  if (bytes.size() < directory_size) throw Error("ICO directory is truncated");
+  std::vector<std::uint8_t> group(sizeof(header) + sizeof(GroupIconEntry) * header.count);
+  std::memcpy(group.data(), &header, sizeof(header));
+  for (std::uint16_t i = 0; i < header.count; ++i) {
+    IconDirEntry entry{};
+    std::memcpy(&entry, bytes.data() + sizeof(header) + i * sizeof(entry), sizeof(entry));
+    if (entry.offset > bytes.size() || entry.size > bytes.size() - entry.offset)
+      throw Error("ICO image range is invalid");
+    const auto id = static_cast<std::uint16_t>(i + 1);
+    if (!UpdateResourceW(update, MAKEINTRESOURCEW(3), MAKEINTRESOURCEW(id), MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                         const_cast<std::uint8_t*>(bytes.data() + entry.offset), entry.size))
+      throw Error("UpdateResource(RT_ICON) failed");
+    GroupIconEntry group_entry{entry.width, entry.height, entry.color_count, entry.reserved,
+                               entry.planes, entry.bit_count, entry.size, id};
+    std::memcpy(group.data() + sizeof(header) + i * sizeof(group_entry), &group_entry,
+                sizeof(group_entry));
+  }
+  if (!UpdateResourceW(update, MAKEINTRESOURCEW(14), MAKEINTRESOURCEW(1),
+                       MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), group.data(),
+                       static_cast<DWORD>(group.size())))
+    throw Error("UpdateResource(RT_GROUP_ICON) failed");
+}
+
+}  // namespace
+
+void UpdatePeResources(const std::filesystem::path& executable,
+                       const PeMetadata& metadata) {
+  if (metadata.product_name.empty() && metadata.company_name.empty() &&
+      metadata.file_description.empty() && metadata.copyright.empty() &&
+      metadata.icon.empty())
+    return;
+  ResourceUpdate update(executable);
+  if (!metadata.product_name.empty() || !metadata.file_description.empty()) {
+    auto version = BuildVersionResource(metadata);
+    if (!UpdateResourceW(update.get(), MAKEINTRESOURCEW(16), MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), version.data(),
+                         static_cast<DWORD>(version.size())))
+      throw Error("UpdateResource(RT_VERSION) failed");
+  }
+  UpdateIcon(update.get(), metadata.icon);
+  update.Commit();
+}
+
+}  // namespace lwweb

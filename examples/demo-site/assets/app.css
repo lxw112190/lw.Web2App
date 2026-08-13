@@ -1,0 +1,8 @@
+:root { color-scheme: dark; font-family: "Segoe UI", sans-serif; }
+body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0c1222; color: #e8eefc; }
+main { width: min(680px, 80vw); padding: 48px; border: 1px solid #304269; border-radius: 20px; background: #131d33; }
+span { color: #70a5ff; font-size: 12px; font-weight: 700; letter-spacing: .18em; }
+h1 { margin: 12px 0; font-size: 64px; }
+p { color: #a9b8d4; font-size: 18px; }
+a { color: #8bb7ff; }
+
