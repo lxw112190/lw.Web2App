@@ -209,7 +209,8 @@ jobs:
             "dist/lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}.tar.gz" lw.Web2App
           sha256sum \
             "dist/lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}.tar.gz" \
-            dist/packages/* \
+            dist/packages/*.deb \
+            dist/packages/*.tar.gz \
             dist/lw.Web2App/lw.Web2App \
             dist/lw.Web2App/examples/wechat-article-formatter \
             > "dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt"
