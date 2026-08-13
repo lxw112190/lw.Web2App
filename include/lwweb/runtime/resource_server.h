@@ -17,11 +17,14 @@ class Server;
 
 namespace lwweb {
 
+class Logger;
+
 // 为嵌入 EXE 的 ZIP 建立中央目录索引，并按资源路径独立解压。
 // 构造阶段会执行条目数量、路径和解压尺寸等安全检查。
 class ZipResourceStore {
  public:
-  ZipResourceStore(const LoadedPayload& payload, SecurityLimits limits = {});
+  ZipResourceStore(const LoadedPayload& payload, SecurityLimits limits = {},
+                   const Logger* logger = nullptr);
   ~ZipResourceStore();
   ZipResourceStore(const ZipResourceStore&) = delete;
   ZipResourceStore& operator=(const ZipResourceStore&) = delete;
@@ -39,7 +42,8 @@ class ZipResourceStore {
 // 服务严格校验 Host，并为不存在的路径按配置提供 SPA fallback。
 class ResourceServer {
  public:
-  ResourceServer(const LoadedPayload& payload, SecurityLimits limits = {});
+  ResourceServer(const LoadedPayload& payload, SecurityLimits limits = {},
+                 const Logger* logger = nullptr);
   ~ResourceServer();
   ResourceServer(const ResourceServer&) = delete;
   ResourceServer& operator=(const ResourceServer&) = delete;
@@ -54,6 +58,7 @@ class ResourceServer {
   std::unique_ptr<httplib::Server> server_;
   std::thread thread_;
   int port_ = 0;
+  const Logger* logger_ = nullptr;
 };
 
 }  // namespace lwweb

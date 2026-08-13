@@ -1,6 +1,7 @@
 #include "lwweb/runtime/resource_server.h"
 
 #include "lwweb/common/error.h"
+#include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
 
 #include <httplib.h>
@@ -21,9 +22,10 @@ struct ZipResourceStore::Impl {
   ResourceCache cache;
   std::mutex mutex;
   std::ifstream file;
+  const Logger* logger = nullptr;
 
-  Impl(const LoadedPayload& loaded, SecurityLimits security)
-      : payload(loaded), limits(security) {
+  Impl(const LoadedPayload& loaded, SecurityLimits security, const Logger* log)
+      : payload(loaded), limits(security), logger(log) {
     if (!(payload.footer.flags & kPayloadHasZip)) throw Error("Payload has no local ZIP archive");
     file.open(payload.executable, std::ios::binary);
     if (!file) throw Error("Cannot open executable for ZIP access");
@@ -63,8 +65,9 @@ struct ZipResourceStore::Impl {
   ~Impl() { mz_zip_reader_end(&zip); }
 };
 
-ZipResourceStore::ZipResourceStore(const LoadedPayload& payload, SecurityLimits limits)
-    : impl_(std::make_unique<Impl>(payload, limits)) {}
+ZipResourceStore::ZipResourceStore(const LoadedPayload& payload, SecurityLimits limits,
+                                   const Logger* logger)
+    : impl_(std::make_unique<Impl>(payload, limits, logger)) {}
 
 ZipResourceStore::~ZipResourceStore() = default;
 
@@ -76,7 +79,13 @@ bool ZipResourceStore::Exists(const std::string& path) const {
 std::vector<std::uint8_t> ZipResourceStore::Read(const std::string& path) {
   const auto normalized = NormalizeArchivePath(path);
   if (!normalized) throw Error("Unsafe resource path");
-  if (const auto cached = impl_->cache.Get(*normalized)) return *cached;
+  if (const auto cached = impl_->cache.Get(*normalized)) {
+    if (impl_->logger && impl_->logger->DebugEnabled())
+      impl_->logger->Debug("ZIP cache hit: " + *normalized);
+    return *cached;
+  }
+  if (impl_->logger && impl_->logger->DebugEnabled())
+    impl_->logger->Debug("ZIP cache miss: " + *normalized);
   const auto it = impl_->entries.find(*normalized);
   if (it == impl_->entries.end()) throw Error("Resource was not found");
 
@@ -95,14 +104,15 @@ std::vector<std::uint8_t> ZipResourceStore::Read(const std::string& path) {
   return bytes;
 }
 
-ResourceServer::ResourceServer(const LoadedPayload& payload, SecurityLimits limits)
-    : payload_(payload), limits_(limits) {}
+ResourceServer::ResourceServer(const LoadedPayload& payload, SecurityLimits limits,
+                               const Logger* logger)
+    : payload_(payload), limits_(limits), logger_(logger) {}
 
 ResourceServer::~ResourceServer() { Stop(); }
 
 std::string ResourceServer::Start() {
   if (thread_.joinable()) return "http://127.0.0.1:" + std::to_string(port_) + "/";
-  store_ = std::make_unique<ZipResourceStore>(payload_, limits_);
+  store_ = std::make_unique<ZipResourceStore>(payload_, limits_, logger_);
   server_ = std::make_unique<httplib::Server>();
   server_->set_payload_max_length(1024);
   server_->Get("/health", [](const httplib::Request&, httplib::Response& response) {
@@ -110,6 +120,7 @@ std::string ResourceServer::Start() {
     response.set_header("Cache-Control", "no-store");
   });
   server_->Get("/.*", [this](const httplib::Request& request, httplib::Response& response) {
+    if (logger_ && logger_->DebugEnabled()) logger_->Debug("GET " + request.path);
     const auto expected = "127.0.0.1:" + std::to_string(port_);
     const auto host = request.get_header_value("Host");
     if (host != expected) {
@@ -130,6 +141,8 @@ std::string ResourceServer::Start() {
         return;
       }
       normalized = NormalizeArchivePath(payload_.manifest.entry);
+      if (logger_ && logger_->DebugEnabled())
+        logger_->Debug("SPA fallback: " + request.path);
     }
     try {
       auto bytes = store_->Read(*normalized);
@@ -149,6 +162,7 @@ std::string ResourceServer::Start() {
   port_ = server_->bind_to_any_port("127.0.0.1");
   if (port_ <= 0) throw Error("Cannot bind the local resource server");
   thread_ = std::thread([this] { server_->listen_after_bind(); });
+  if (logger_) logger_->Info("Resource server: 127.0.0.1:" + std::to_string(port_));
   return "http://127.0.0.1:" + std::to_string(port_) + "/";
 }
 

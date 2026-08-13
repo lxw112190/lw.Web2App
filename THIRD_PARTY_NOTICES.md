@@ -12,6 +12,9 @@ lw.Web2App uses the following dependencies when built from source:
   [`third_party/licenses/cpp-httplib-LICENSE.txt`](third_party/licenses/cpp-httplib-LICENSE.txt).
 - JSON for Modern C++, copyright Niels Lohmann and contributors. See
   [`third_party/licenses/nlohmann-json-LICENSE.txt`](third_party/licenses/nlohmann-json-LICENSE.txt).
+- spdlog, copyright Gabi Melman and contributors. The bundled spdlog release
+  includes its bundled fmt dependency. See
+  [`third_party/licenses/spdlog-LICENSE.txt`](third_party/licenses/spdlog-LICENSE.txt).
 
 The corresponding license and notice files are included in source checkouts
 and binary distribution archives.

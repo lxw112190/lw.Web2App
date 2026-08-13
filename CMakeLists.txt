@@ -55,6 +55,21 @@ FetchContent_Declare(miniz
   URL_HASH SHA256=09569fc19d060ac9f5999ba9356728c2494ebe6a24ac0eb0a6b6ae3d396cfea6)
 FetchContent_MakeAvailable(miniz)
 
+if(EXISTS "${LWWEB_DEPS_CACHE}/spdlog.tar.gz")
+  set(LWWEB_SPDLOG_URL "${LWWEB_DEPS_CACHE}/spdlog.tar.gz")
+else()
+  set(LWWEB_SPDLOG_URL "https://github.com/gabime/spdlog/archive/refs/tags/v1.17.0.tar.gz")
+endif()
+FetchContent_Declare(spdlog
+  URL "${LWWEB_SPDLOG_URL}"
+  URL_HASH SHA256=d8862955c6d74e5846b3f580b1605d2428b11d97a410d86e2fb13e857cd3a744)
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+set(SPDLOG_WCHAR_FILENAMES ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(spdlog)
+
 set(WEBVIEW2_VERSION "1.0.4078.44" CACHE STRING "WebView2 SDK version")
 if(EXISTS "${LWWEB_DEPS_CACHE}/webview2.zip")
   set(LWWEB_WEBVIEW2_URL "${LWWEB_DEPS_CACHE}/webview2.zip")
@@ -77,6 +92,7 @@ endif()
 
 add_library(lwweb_core STATIC
   src/common/file_utils.cpp
+  src/common/logging.cpp
   src/common/path_utils.cpp
   src/common/sha256.cpp
   src/packer/manifest.cpp
@@ -90,10 +106,12 @@ target_link_libraries(lwweb_core PUBLIC
   nlohmann_json::nlohmann_json
   httplib::httplib
   miniz
+  spdlog::spdlog
   bcrypt
   ws2_32
   version)
-target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)
+target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
+  SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)
 target_compile_options(lwweb_core PRIVATE /W4 /permissive- /utf-8 /EHsc)
 
 add_executable(lwweb WIN32

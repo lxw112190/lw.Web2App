@@ -37,7 +37,10 @@ enum ControlId {
   kWidth,
   kHeight,
   kResizable,
+  kFullscreen,
   kSpa,
+  kLogging,
+  kDebugLogging,
   kIcon,
   kBrowseIcon,
   kOutput,
@@ -160,9 +163,10 @@ std::wstring LocalizeProgress(const std::string& message) {
 }
 
 void SetStatus(HWND window, const std::wstring& text) {
-  SetWindowTextW(GetDlgItem(window, kStatus), text.c_str());
-  InvalidateRect(GetDlgItem(window, kStatus), nullptr, TRUE);
-  UpdateWindow(GetDlgItem(window, kStatus));
+  const auto status = GetDlgItem(window, kStatus);
+  SetWindowTextW(status, text.c_str());
+  RedrawWindow(status, nullptr, nullptr,
+               RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
 }
 
 void UpdateMode(HWND window) {
@@ -193,7 +197,11 @@ void Pack(HWND window) {
     options.manifest.width = std::stoul(Text(window, kWidth));
     options.manifest.height = std::stoul(Text(window, kHeight));
     options.manifest.resizable = IsDlgButtonChecked(window, kResizable) == BST_CHECKED;
+    options.manifest.fullscreen = IsDlgButtonChecked(window, kFullscreen) == BST_CHECKED;
     options.manifest.spa_fallback = IsDlgButtonChecked(window, kSpa) == BST_CHECKED;
+    options.manifest.logging.enabled = IsDlgButtonChecked(window, kLogging) == BST_CHECKED;
+    options.manifest.logging.level =
+        IsDlgButtonChecked(window, kDebugLogging) == BST_CHECKED ? "debug" : "info";
     options.metadata.product_name = Text(window, kTitle);
     options.metadata.file_description = Text(window, kTitle);
     const auto icon = Text(window, kIcon);
@@ -299,15 +307,23 @@ void BuildInterface(State& state) {
   AddEdit(state, L"1280", 48, 451, 92, kWidth, nullptr, ES_NUMBER);
   AddLabel(state, L"×", 150, 457, 24, 22, 0, state.section_font);
   AddEdit(state, L"800", 180, 451, 92, kHeight, nullptr, ES_NUMBER);
-  AddControl(state, L"BUTTON", L"允许调整窗口大小", WS_TABSTOP | BS_AUTOCHECKBOX,
-             309, 454, 170, 26, kResizable);
-  AddControl(state, L"BUTTON", L"启用 SPA 路由回退", WS_TABSTOP | BS_AUTOCHECKBOX,
-             500, 454, 180, 26, kSpa);
+  AddControl(state, L"BUTTON", L"默认全屏显示", WS_TABSTOP | BS_AUTOCHECKBOX,
+             309, 454, 132, 26, kFullscreen);
+  AddControl(state, L"BUTTON", L"允许调整大小", WS_TABSTOP | BS_AUTOCHECKBOX,
+             443, 454, 130, 26, kResizable);
+  AddControl(state, L"BUTTON", L"SPA 路由回退", WS_TABSTOP | BS_AUTOCHECKBOX,
+             576, 454, 130, 26, kSpa);
+  CheckDlgButton(state.window, kFullscreen, BST_CHECKED);
   CheckDlgButton(state.window, kResizable, BST_CHECKED);
   CheckDlgButton(state.window, kSpa, BST_CHECKED);
 
   AddLabel(state, L"应用图标（PNG / ICO，可选）", 48, 499, 240, 22, 0,
            state.small_font);
+  AddControl(state, L"BUTTON", L"启用运行日志", WS_TABSTOP | BS_AUTOCHECKBOX,
+             330, 496, 140, 26, kLogging);
+  AddControl(state, L"BUTTON", L"详细日志", WS_TABSTOP | BS_AUTOCHECKBOX,
+             500, 496, 110, 26, kDebugLogging);
+  CheckDlgButton(state.window, kLogging, BST_CHECKED);
   AddEdit(state, L"", 48, 523, 548, kIcon, L"留空则使用默认图标");
   AddButton(state, L"选择图标", 610, 523, 102, 34, kBrowseIcon);
   AddLabel(state, L"输出位置", 48, 571, 120, 22, 0, state.small_font);
@@ -342,6 +358,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         case kModeUrl:
           UpdateMode(window);
           return 0;
+        case kLogging:
+          EnableWindow(GetDlgItem(window, kDebugLogging),
+                       IsDlgButtonChecked(window, kLogging) == BST_CHECKED);
+          return 0;
         case kBrowseSource: {
           const auto path = PickFolder(window);
           if (!path.empty()) SetWindowTextW(GetDlgItem(window, kSource), path.c_str());
@@ -371,8 +391,14 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     case WM_CTLCOLORSTATIC: {
       const auto dc = reinterpret_cast<HDC>(wparam);
       const auto control = reinterpret_cast<HWND>(lparam);
-      SetBkMode(dc, TRANSPARENT);
       const auto id = GetDlgCtrlID(control);
+      if (id == kStatus && state) {
+        SetBkMode(dc, OPAQUE);
+        SetBkColor(dc, kBackground);
+        SetTextColor(dc, kSuccess);
+        return reinterpret_cast<INT_PTR>(state->background_brush);
+      }
+      SetBkMode(dc, TRANSPARENT);
       SetTextColor(dc, id == kStatus ? kSuccess :
                        (id == kModeHint ? kMuted : kText));
       return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));

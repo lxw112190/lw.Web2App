@@ -14,8 +14,10 @@ The target computer does not need Node.js, Rust, .NET, Electron, or a compiler t
 - Package a local HTML, Vue, React, or Vite build directory into one EXE.
 - Package an online `http://` or `https://` URL into one EXE.
 - WebView2 Evergreen Runtime with the WebView2 Loader statically linked.
-- Independently designed, versioned `LWWEB001` V1 payload container.
-- SHA-256 verification before embedded content is opened.
+- Independently designed `LWWEB002` V2 payload container with `LWWEB001` V1 read compatibility.
+- Combined SHA-256 verification of the resource ZIP and manifest before embedded content is opened.
+- Generated applications start in borderless fullscreen by default; `F11` toggles and `Esc` exits fullscreen.
+- spdlog-based rotating packager/runtime logs: INFO by default, 2 MiB per file, five files retained.
 - ZIP central-directory indexing and per-request decompression instead of eager extraction.
 - A 32 MiB LRU cache for small hot resources; large files do not remain in memory.
 - SPA fallback for history-mode Vue Router and React Router applications.
@@ -34,21 +36,60 @@ lw.Web2App creates a single-file application using a **native Runner plus an end
 1. **Validate the input**: local mode checks that the static directory and entry HTML exist, then enforces limits on file count, individual size, and total size.
 2. **Copy the Runner**: the current `lw.Web2App.exe` supplies the native PE prefix. If an already packaged application is used as the packer, only its original Runner prefix is copied, so old payloads are not nested.
 3. **Update PE resources**: the copy receives the selected icon, product name, description, company, version, and copyright fields shown by Windows Explorer under **Properties → Details**.
-4. **Build the ZIP**: files are read recursively and stored under normalized relative paths. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
-5. **Append the container**: the resource ZIP, Manifest JSON, and a fixed 80-byte footer are appended to the PE file. The footer stores the format version, flags, section offsets and lengths, and the ZIP payload's SHA-256. The Windows PE loader ignores this trailing data, while the Runner can read it by offset.
+4. **Build the ZIP**: files are streamed into a temporary ZIP under normalized relative paths, avoiding simultaneous in-memory copies of the source and complete archive. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
+5. **Append the container**: the resource ZIP, Manifest JSON, and a fixed 80-byte footer are streamed onto the PE file. The V2 footer stores the format version, flags, section offsets and lengths, and a combined SHA-256 of the ZIP plus manifest.
 
 Online URL mode does not snapshot or embed the remote website. Its ZIP is empty and the manifest records only the target URL and window settings. The generated application therefore requires network access and follows future changes to that website.
 
 ### Runtime
 
-1. The executable reads the `LWWEB001` footer from its own end. Without a footer it opens the packager; with a footer it enters generated-application mode.
-2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP. It refuses to open embedded content when validation fails.
+1. The executable reads the `LWWEB002` footer from its own end. Without a footer it opens the packager; with a footer it enters generated-application mode. Legacy `LWWEB001` packages remain readable.
+2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP plus manifest. It refuses to open embedded content when validation fails.
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
 4. A private HTTP service starts on a random `127.0.0.1` port. It validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback when configured.
 5. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
-6. The native window creates a WebView2 Controller and navigates to the private local address or configured online URL. Title, dimensions, resizing, and developer-tool policy come from the manifest.
+6. The native window creates a WebView2 Controller and navigates to the private local address or configured online URL. Title, dimensions, resizing, default fullscreen, and developer-tool policy come from the manifest. `F11` toggles fullscreen and `Esc` exits it.
+7. Each app has a stable `app_id`; WebView2 data is stored under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`, so renaming the EXE does not change its storage location.
 
 SHA-256 detects resource corruption or modification; it does not authenticate a publisher. Trusted distribution of the manifest and complete EXE still requires a signing mechanism such as Authenticode.
+
+## Logging and Diagnostics
+
+lw.Web2App uses synchronous spdlog rotating-file logging. INFO is the default level; each file is limited to 2 MiB and five rotated files are retained. Logs are never written beside the EXE, so an application installed under `Program Files` does not require write access to its installation directory.
+
+- Packager: `%LOCALAPPDATA%\lw.Web2App\logs\packer.log`
+- Generated application: `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\logs\app.log`
+- Startup failures before a Manifest/Payload can be loaded: `%LOCALAPPDATA%\lw.Web2App\logs\launcher.log`
+
+INFO records packaging stages, resource counts and sizes, payload digest, server port, WebView2 version, initialization, and navigation results. DEBUG additionally records static requests, ZIP cache hits/misses, and SPA fallback. The Runtime also records `console.error`, uncaught script errors, and unhandled Promise rejections as `[WEB-ERROR]`; ordinary `console.log` calls are not logged.
+
+The GUI enables runtime logging by default. Selecting **Detailed logging** maps to DEBUG. Clearing **Enable runtime logging** disables only the generated application's Runtime log; the packager retains its own diagnostics. Logging initialization failures never prevent packaging or application startup.
+
+Typical Runtime output:
+
+```text
+2026-08-13 18:37:27.820 [info] [lw.WebRuntime] Payload format: LWWEB002
+2026-08-13 18:37:27.820 [info] [lw.WebRuntime] Payload verification OK
+2026-08-13 18:37:27.821 [info] [lw.WebRuntime] Resource server: 127.0.0.1:60435
+2026-08-13 18:37:27.876 [info] [lw.WebRuntime] WebView2 Runtime: 135.0.3179.98
+2026-08-13 18:37:28.503 [info] [lw.WebRuntime] WebView2 initialized
+2026-08-13 18:37:28.623 [info] [lw.WebRuntime] Navigation completed
+```
+
+For a blank screen or startup failure, inspect `app.log` first. If no per-app directory was created, inspect the shared `launcher.log`. Comparing Windows, WebView2, and payload versions plus the first ERROR line between affected and working computers usually isolates environment, integrity, or web-script failures quickly.
+
+Logging settings are stored in the Manifest. The GUI currently exposes only enablement and INFO/DEBUG selection; rotation settings retain these safe defaults:
+
+```json
+{
+  "logging": {
+    "enabled": true,
+    "level": "info",
+    "max_file_size": 2097152,
+    "max_files": 5
+  }
+}
+```
 
 ## System Requirements
 
@@ -111,6 +152,7 @@ CMake first checks `.deps` in the repository root for these archives:
 .deps/json.tar.xz
 .deps/cpp-httplib.tar.gz
 .deps/miniz.tar.gz
+.deps/spdlog.tar.gz
 .deps/webview2.zip
 ```
 
@@ -134,6 +176,8 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --title "My App" `
   --width 1280 `
   --height 800 `
+  --windowed `
+  --debug-log `
   --icon .\app.png `
   --company "Example Company" `
   --version 1.2.0.0 `
@@ -157,6 +201,9 @@ lw.Web2App.exe inspect .\MyApp.exe
 Additional options:
 
 - `--no-spa`: disable SPA fallback.
+- `--windowed`: override the default and start the generated app in a normal window.
+- `--no-log`: disable runtime logging in the generated application.
+- `--debug-log`: enable DEBUG runtime logs for resource requests, ZIP cache activity, and SPA fallback.
 - `--devtools`: enable developer tools and the default context menu.
 - `--company`: write the company name.
 - `--version`: write file and product versions.
@@ -164,15 +211,15 @@ Additional options:
 
 A generated EXE can also execute CLI packaging commands. Only its original Runner prefix is copied, so old payloads are never nested.
 
-## Payload V1 Format
+## Payload V2 Format
 
 ```text
 Runner PE
 Resource ZIP       empty in online URL mode
 Manifest JSON
 Footer             fixed 80 bytes
-  magic[8]         LWWEB001
-  version u32      1
+  magic[8]         LWWEB002
+  version u32      2
   flags u32
   payloadOffset u64
   payloadSize u64
@@ -181,9 +228,7 @@ Footer             fixed 80 bytes
   SHA-256[32]
 ```
 
-All integers are explicitly serialized as little endian instead of relying on compiler structure layout. Both the manifest and footer carry the payload digest. The Runner checks their agreement and then hashes the actual payload before starting WebView2.
-
-See [Payload V1 format](docs/format-v1.md) for the binary layout.
+All integers are explicitly serialized as little endian instead of relying on compiler structure layout. V2 hashes the consecutive Resource ZIP and Manifest JSON bytes, so URL and window-setting changes are detected as well. The Runner remains compatible with the legacy [Payload V1 format](docs/format-v1.md), while new applications are always written as V2.
 
 ## Security Boundary
 
@@ -228,6 +273,7 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 - miniz — MIT License
 - cpp-httplib — MIT License
 - nlohmann/json — MIT License
+- spdlog (including bundled fmt) — MIT License
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -239,7 +285,7 @@ Linux support is the primary next milestone. The implementation will evolve alon
 2. Retain the Win32 + WebView2 + PE-resource backend for Windows, and add a native Linux window and system-WebView backend, initially evaluating GTK + WebKitGTK.
 3. Add an ELF Runner and Linux application metadata. The first intended package is an x86_64 `.tar.gz`, with AppImage under evaluation; `.deb`, `.rpm`, and ARM64 will follow only after the base runtime is stable.
 4. Add Linux CI for compilation, unit tests, static-site packaging, payload inspection, and a minimal launch smoke test.
-5. Preserve parsing compatibility with the `LWWEB001` V1 container. Platform-specific needs will use versioned manifest fields or a new container version only when necessary.
+5. Preserve parsing compatibility with the `LWWEB001` V1 container. New applications use `LWWEB002` V2; later versions will be added only when platform requirements demand them.
 
 Until that work is delivered, the README, releases, and repository description should continue to say **Windows only today** rather than presenting Linux support as complete.
 
@@ -260,9 +306,7 @@ Other planned improvements:
 
 If this project is useful to you, you can scan the QR code to support its maintenance:
 
-<p align="center">
-  <img src="docs/assets/sponsor.jpg" alt="WeChat sponsor QR code" width="420">
-</p>
+<img src="docs/assets/sponsor.jpg" alt="WeChat sponsor QR code" width="260">
 
 ## License
 
