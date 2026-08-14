@@ -104,6 +104,7 @@ endif()
 add_library(lwweb_core STATIC
   src/cli/command_line.cpp
   src/common/file_utils.cpp
+  src/common/http_origin.cpp
   src/common/logging.cpp
   src/common/path_utils.cpp
   src/common/sha256.cpp
@@ -111,6 +112,7 @@ add_library(lwweb_core STATIC
   src/packer/payload.cpp
   src/packer/packer.cpp
   src/runtime/resource_cache.cpp
+  src/runtime/backend_proxy.cpp
   src/runtime/single_instance.cpp
   src/runtime/resource_server.cpp)
 target_include_directories(lwweb_core PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated")

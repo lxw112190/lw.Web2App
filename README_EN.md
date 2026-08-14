@@ -34,6 +34,7 @@ Linux graphical packager (Ubuntu 22.04):
 - Deterministic GUI discovery of `.html`/`.htm` launch pages; separate Manifest, GUI, and CLI `entry` and `start_path` settings support both multi-page entry files and initial SPA routes.
 - The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
 - True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
+- An optional controlled backend proxy forwards same-origin `/__lw_proxy__/...` requests to one fixed legacy HTTP origin from the Manifest, without disabling WebView security; Windows and Linux share the same implementation.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
 - Limits for entry count, individual file size, and total uncompressed size.
 - PNG/ICO application icons and complete Windows PE version metadata.
@@ -59,11 +60,24 @@ Online URL mode does not snapshot or embed the remote website. Its ZIP is empty 
 2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP plus manifest. It refuses to open embedded content when validation fails.
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
 4. The Runner first acquires an `app_id`-specific single-instance lock through a Windows named mutex or Linux `flock`, then starts the private HTTP service on its stable preferred `127.0.0.1` port. The service validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback. If an unrelated process occupies the preferred port, deterministic alternatives are tried and logged.
-5. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
-6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Local mode combines the private service origin with Manifest `start_path`; when a requested file is absent and SPA fallback is enabled, the server returns `entry`. A traditional multi-page app can use `entry=login.html` with `start_path=/login.html`, while a Vue/React history route can use `entry=index.html` with `start_path=/login`. Legacy packages without `start_path` default to `/`. Window behavior also comes from the Manifest; `F11` toggles fullscreen and `Esc` exits it.
-7. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
+5. When `backend_proxy` is enabled, the local server matches `/__lw_proxy__/` before static resources. Only GET, HEAD, POST, PUT, PATCH, DELETE, and OPTIONS are forwarded to the fixed `origin`; query strings and bodies are preserved, while cookies and same-origin redirects are rewritten. The page never contacts the LAN backend directly.
+6. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
+7. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Local mode combines the private service origin with Manifest `start_path`; when a requested file is absent and SPA fallback is enabled, the server returns `entry`. A traditional multi-page app can use `entry=login.html` with `start_path=/login.html`, while a Vue/React history route can use `entry=index.html` with `start_path=/login`. Legacy packages without `start_path` default to `/`. Window behavior also comes from the Manifest; `F11` toggles fullscreen and `Esc` exits it.
+8. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
 
 The `WebView2` directory is the writable user-data directory required by Microsoft WebView2. It contains cookies, sign-in state, localStorage, IndexedDB, HTTP cache, service workers, and site permissions. It cannot be eliminated while retaining complete browser behavior; placing it under `%LOCALAPPDATA%` also avoids startup failures when the EXE is installed in a read-only location such as `Program Files`. It may be deleted after the app has fully exited to reset web data, but WebView2 creates it again on the next launch.
+
+### Legacy HTTP Backend Compatibility
+
+Select **Legacy HTTP backend compatibility** and enter a fixed backend origin. For example, when the backend is `http://192.0.2.10:8080`, change the frontend API base from the absolute LAN URL as follows (`192.0.2.0/24` is reserved for documentation):
+
+```javascript
+const apiBase = "/__lw_proxy__";
+```
+
+The C++ Runtime forwards `/__lw_proxy__/sysUser/login` to `http://192.0.2.10:8080/sysUser/login`. To the page, the request remains same-origin with its `127.0.0.1` resource server, so it does not depend on CORS, PNA, or `--disable-web-security`. The proxy fixes the target Host, rejects cross-site callers and cross-host redirects, filters hop-by-hop and proxy-authentication headers, limits requests to 16 MiB and responses to 64 MiB, and scopes backend cookies to the proxy prefix. Logs contain only the method, path without its query string, status, and elapsed time; they never include bodies, passwords, cookies, authorization credentials, or query parameters.
+
+This release supports `http://` backends only and is intended for trusted legacy LAN systems. HTTPS proxying, WebSocket, NTLM/Kerberos, and multiple backend origins are not yet supported. Projects with hard-coded absolute API URLs must still change their base URL to `/__lw_proxy__`; lw.Web2App does not rewrite minified JavaScript automatically.
 
 SHA-256 detects resource corruption or modification; it does not authenticate a publisher. Trusted distribution of the manifest and complete EXE still requires a signing mechanism such as Authenticode.
 
@@ -227,6 +241,7 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --height 800 `
   --windowed `
   --debug-log `
+  --backend-origin http://192.0.2.10:8080 `
   --icon .\app.png `
   --company "Example Company" `
   --version 1.2.0.0 `
@@ -259,7 +274,7 @@ Additional options:
 
 - `--entry`: select the real archived HTML, such as `login.html` or `pages/login.html`.
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
-- `--allow-insecure-http`: allow a Windows WebView2 app to contact a legacy plaintext HTTP backend. The GUI label is `HTTP 后台兼容`; it is disabled by default and should only be enabled for trusted intranet systems that cannot yet migrate to HTTPS.
+- `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
 - `--no-log`: disable runtime logging in the generated application.
@@ -300,6 +315,7 @@ This project packages trusted static web applications. It is not a sandbox for h
 - Default maximum total uncompressed size: 2 GiB.
 - Maximum manifest size: 1 MiB.
 - The HTTP service listens only on IPv4 loopback and requires the exact per-app port Host value.
+- The backend proxy accepts only the fixed Manifest `http://` origin; arbitrary URLs, cross-site callers, cross-host redirects, and ZIP resources that collide with its prefix are rejected, with explicit size and timeout limits.
 - SHA-256 detects corruption or modification but does not authenticate a publisher. Digital signatures are planned separately.
 
 ## Project Layout
@@ -310,7 +326,7 @@ src/app/       Windows Win32 GUI, Runtime, and entry point
 src/linux/     Linux GTK3 GUI, WebKitGTK Runtime, and entry point
 src/webview/   WebView2 host
 src/packer/    Manifest, payload, and packer
-src/runtime/   ZIP resource access, LRU cache, and local HTTP server
+src/runtime/   ZIP resource access, LRU cache, local HTTP server, and controlled backend proxy
 src/pe/        Icon and version resource updates
 src/common/    File, path, and SHA-256 utilities
 tests/         Unit and packaging/resource integration tests
@@ -348,7 +364,7 @@ Explicit Linux Beta boundaries:
 - Ubuntu 22.04/24.04 x86_64 only. Generated apps run within the same platform family; Windows and Linux Runners cannot generate each other's binaries.
 - Generated output is a single ELF with an appended payload. The lw.Web2App tool has `.deb`/`.tar.gz` packages, but arbitrary generated apps do not yet receive their own DEB, desktop file, or icon.
 - Rendering uses the system WebKitGTK 4.1. Browser security updates and Web API behavior therefore follow Ubuntu updates.
-- GTK packaging is currently synchronous. Background packaging, cancellation, and percentage progress for very large projects remain future work.
+- Both GTK and Win32 package resources on a worker thread so the GUI remains responsive for large projects. Cancellation and percentage progress remain future work.
 
 Next priorities are generated-app desktop/icon/DEB metadata, AppImage evaluation, external-link and download policies, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
 

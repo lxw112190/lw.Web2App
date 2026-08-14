@@ -8,6 +8,7 @@
 #include <httplib.h>
 
 #include <chrono>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -44,6 +45,7 @@ struct ListeningServerGuard {
 
   bool Start(std::uint16_t port) {
     server = std::make_unique<httplib::Server>();
+    server->new_task_queue = [] { return new httplib::ThreadPool(2); };
 #ifdef _WIN32
     server->set_socket_options([](auto socket) {
       const BOOL exclusive = TRUE;
@@ -64,6 +66,30 @@ struct ListeningServerGuard {
 
   ~ListeningServerGuard() {
     if (server) server->stop();
+    if (thread.joinable()) thread.join();
+  }
+};
+
+struct BackendServerGuard {
+  httplib::Server server;
+  std::thread thread;
+  int port = 0;
+
+  template <typename Configure>
+  bool Bind(Configure configure) {
+    server.new_task_queue = [] { return new httplib::ThreadPool(2); };
+    configure(server);
+    port = server.bind_to_any_port("127.0.0.1");
+    return port > 0;
+  }
+
+  void Listen() {
+    thread = std::thread([this] { server.listen_after_bind(); });
+    server.wait_until_ready();
+  }
+
+  ~BackendServerGuard() {
+    server.stop();
     if (thread.joinable()) thread.join();
   }
 };
@@ -163,6 +189,32 @@ void RunPayloadTests() {
   pack.source_directory = base / "site";
   pack.output = base / "packed.exe";
   pack.manifest.title = "Integration Test";
+  std::atomic<int> backend_requests{0};
+  std::string backend_target;
+  std::string backend_body;
+  std::string backend_origin_header;
+  BackendServerGuard backend;
+  Check(backend.Bind([&](httplib::Server& server) {
+          server.Post("/sysUser/login", [&](const httplib::Request& request,
+                                             httplib::Response& response) {
+            ++backend_requests;
+            backend_target = request.target;
+            backend_body = request.body;
+            backend_origin_header = request.get_header_value("Origin");
+            response.status = 200;
+            response.set_header("Set-Cookie",
+                                "JSESSIONID=test; Domain=127.0.0.1; Path=/; HttpOnly");
+            response.set_content(R"({"success":true})", "application/json");
+          });
+          server.Get("/external-redirect", [](const httplib::Request&,
+                                                httplib::Response& response) {
+            response.set_redirect("http://example.com/escape");
+          });
+        }),
+        "mock legacy backend starts");
+  pack.manifest.backend_proxy.enabled = true;
+  pack.manifest.backend_proxy.origin =
+      "http://127.0.0.1:" + std::to_string(backend.port);
   std::unique_ptr<ListeningServerGuard> port_blocker;
   for (int attempt = 0; attempt < 32 && !port_blocker; ++attempt) {
     const auto app_id = "test-port-" + unique + "-" + std::to_string(attempt);
@@ -181,10 +233,11 @@ void RunPayloadTests() {
   }
   lwweb::PackApplication(pack);
   const auto loaded = lwweb::LoadPayload(pack.output);
+  backend.Listen();
   Check(loaded.manifest.title == "Integration Test", "packed manifest loads");
   Check(loaded.manifest.start_path == "/", "packed manifest stores default start path");
-  Check(!loaded.manifest.allow_insecure_http,
-        "insecure HTTP compatibility is disabled by default");
+  Check(loaded.manifest.backend_proxy.enabled,
+        "controlled backend proxy is stored in the package");
   Check(loaded.manifest.fullscreen, "new packages start fullscreen by default");
   Check(loaded.manifest.logging.enabled, "runtime logging enabled by default");
   Check(loaded.manifest.logging.max_file_size == 2ull * 1024 * 1024,
@@ -202,6 +255,40 @@ void RunPayloadTests() {
     const auto address = fallback_server.Start();
     Check(address != "http://127.0.0.1:" + std::to_string(stable_port) + "/",
           "occupied preferred port selects a fallback port");
+    httplib::Client application(address.substr(0, address.size() - 1));
+    httplib::Headers page_headers = {
+        {"Origin", address.substr(0, address.size() - 1)},
+        {"Referer", address + "login.html"},
+        {"Sec-Fetch-Site", "same-origin"}};
+    const auto login = application.Post(
+        "/__lw_proxy__/sysUser/login?source=test", page_headers,
+        std::string(R"({"message":"proxy-test"})"),
+        "application/json");
+    Check(login && login->status == 200 && login->body == R"({"success":true})",
+          "controlled proxy forwards a legacy login POST");
+    Check(backend_target == "/sysUser/login?source=test",
+          "proxy preserves backend query parameters");
+    Check(backend_body == R"({"message":"proxy-test"})",
+          "proxy preserves request body");
+    Check(backend_origin_header ==
+              "http://127.0.0.1:" + std::to_string(backend.port),
+          "proxy rewrites browser origin for the backend");
+    const auto cookie = login->get_header_value("Set-Cookie");
+    Check(cookie.find("Domain=") == std::string::npos,
+          "proxy removes backend cookie domain");
+    Check(cookie.find("Path=/__lw_proxy__") != std::string::npos,
+          "proxy scopes backend cookie to its local prefix");
+    const auto requests_after_login = backend_requests.load();
+    const auto blocked = application.Post(
+        "/__lw_proxy__/sysUser/login", {{"Origin", "http://evil.example"}},
+        R"({"message":"blocked"})", "application/json");
+    Check(blocked && blocked->status == 403,
+          "cross-site proxy request is rejected");
+    Check(backend_requests.load() == requests_after_login,
+          "blocked request never reaches the backend");
+    const auto redirect = application.Get("/__lw_proxy__/external-redirect", page_headers);
+    Check(redirect && redirect->status == 502,
+          "cross-origin backend redirect is rejected");
     fallback_server.Stop();
   }
   lwweb::ZipResourceStore store(loaded);
@@ -254,13 +341,15 @@ void RunPayloadTests() {
   Check(!legacy.fullscreen, "legacy manifest remains windowed");
   Check(!legacy.logging.enabled, "legacy manifest does not unexpectedly enable logging");
   Check(legacy.start_path == "/", "legacy manifest defaults to root start path");
-  Check(!legacy.allow_insecure_http,
-        "legacy manifest retains the secure HTTP-content policy");
-  lwweb::Manifest legacy_http;
-  legacy_http.allow_insecure_http = true;
-  const auto legacy_http_round_trip =
-      lwweb::ParseManifest(lwweb::SerializeManifest(legacy_http));
-  Check(legacy_http_round_trip.allow_insecure_http,
-        "legacy HTTP compatibility survives manifest round trip");
+  Check(!legacy.backend_proxy.enabled,
+        "legacy manifest keeps the controlled backend proxy disabled");
+  lwweb::Manifest proxy_manifest;
+  proxy_manifest.backend_proxy.enabled = true;
+  proxy_manifest.backend_proxy.origin = "http://127.0.0.1:18080";
+  const auto proxy_round_trip =
+      lwweb::ParseManifest(lwweb::SerializeManifest(proxy_manifest));
+  Check(proxy_round_trip.backend_proxy.enabled &&
+            proxy_round_trip.backend_proxy.origin == "http://127.0.0.1:18080",
+        "controlled backend proxy survives manifest round trip");
   std::filesystem::remove_all(base, ignored);
 }

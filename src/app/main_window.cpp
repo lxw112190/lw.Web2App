@@ -45,9 +45,10 @@ enum ControlId {
   kResizable,
   kFullscreen,
   kSpa,
-  kAllowInsecureHttp,
+  kBackendProxy,
   kLogging,
   kDebugLogging,
+  kBackendOrigin,
   kIcon,
   kBrowseIcon,
   kOutput,
@@ -57,6 +58,7 @@ enum ControlId {
   kModeHint,
   kEntryLabel,
   kStartPathLabel,
+  kBackendOriginLabel,
 };
 
 enum class FontRole { Title, Section, Body, Small };
@@ -83,7 +85,7 @@ struct State {
   bool busy = false;
 };
 
-constexpr RECT kStatusRect{48, 795, 712, 821};
+constexpr RECT kStatusRect{48, 843, 712, 869};
 constexpr UINT kPackProgressMessage = WM_APP + 1;
 constexpr UINT kPackFinishedMessage = WM_APP + 2;
 
@@ -312,6 +314,11 @@ void UpdateMode(HWND window) {
   EnableWindow(GetDlgItem(window, kSpa), local);
   EnableWindow(GetDlgItem(window, kEntryLabel), local);
   EnableWindow(GetDlgItem(window, kStartPathLabel), local);
+  EnableWindow(GetDlgItem(window, kBackendProxy), local);
+  const bool proxy = local &&
+                     IsDlgButtonChecked(window, kBackendProxy) == BST_CHECKED;
+  EnableWindow(GetDlgItem(window, kBackendOrigin), proxy);
+  EnableWindow(GetDlgItem(window, kBackendOriginLabel), proxy);
   InvalidateRect(window, nullptr, TRUE);
 }
 
@@ -328,8 +335,12 @@ void Pack(HWND window) {
     options.manifest.resizable = IsDlgButtonChecked(window, kResizable) == BST_CHECKED;
     options.manifest.fullscreen = IsDlgButtonChecked(window, kFullscreen) == BST_CHECKED;
     options.manifest.spa_fallback = IsDlgButtonChecked(window, kSpa) == BST_CHECKED;
-    options.manifest.allow_insecure_http =
-        IsDlgButtonChecked(window, kAllowInsecureHttp) == BST_CHECKED;
+    options.manifest.backend_proxy.enabled =
+        IsDlgButtonChecked(window, kModeLocal) == BST_CHECKED &&
+        IsDlgButtonChecked(window, kBackendProxy) == BST_CHECKED;
+    if (options.manifest.backend_proxy.enabled)
+      options.manifest.backend_proxy.origin =
+          WideToUtf8(Text(window, kBackendOrigin));
     options.manifest.logging.enabled = IsDlgButtonChecked(window, kLogging) == BST_CHECKED;
     options.manifest.logging.level =
         IsDlgButtonChecked(window, kDebugLogging) == BST_CHECKED ? "debug" : "info";
@@ -475,16 +486,22 @@ void BuildInterface(State& state) {
              310, 560, 140, 26, kLogging);
   AddControl(state, L"BUTTON", L"详细日志", WS_TABSTOP | BS_AUTOCHECKBOX,
              466, 560, 100, 26, kDebugLogging);
-  AddControl(state, L"BUTTON", L"HTTP 后台兼容", WS_TABSTOP | BS_AUTOCHECKBOX,
-             570, 560, 122, 26, kAllowInsecureHttp);
+  AddControl(state, L"BUTTON", L"兼容旧式 HTTP 后台", WS_TABSTOP | BS_AUTOCHECKBOX,
+             570, 560, 142, 26, kBackendProxy);
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
   AddEdit(state, L"", 48, 587, 548, kIcon, L"留空则使用默认图标");
   AddButton(state, L"选择图标", 610, 587, 102, 34, kBrowseIcon);
-  AddLabel(state, L"输出位置", 48, 635, 120, 22, 0, state.small_font);
-  AddEdit(state, L"", 48, 659, 548, kOutput, L"选择生成的 .exe 文件位置");
-  AddButton(state, L"选择位置", 610, 659, 102, 34, kBrowseOutput);
+  AddLabel(state, L"后台地址", 48, 635, 120, 22, kBackendOriginLabel,
+           state.small_font);
+  AddEdit(state, L"", 48, 659, 664, kBackendOrigin,
+          L"例如：http://192.0.2.10:8080");
+  EnableWindow(GetDlgItem(state.window, kBackendOrigin), FALSE);
+  EnableWindow(GetDlgItem(state.window, kBackendOriginLabel), FALSE);
+  AddLabel(state, L"输出位置", 48, 707, 120, 22, 0, state.small_font);
+  AddEdit(state, L"", 48, 731, 548, kOutput, L"选择生成的 .exe 文件位置");
+  AddButton(state, L"选择位置", 610, 731, 102, 34, kBrowseOutput);
 
-  AddButton(state, L"生成 Windows EXE", 48, 732, 664, 48, kPack);
+  AddButton(state, L"生成 Windows EXE", 48, 780, 664, 48, kPack);
   RefreshHtmlEntries(state.window);
 }
 
@@ -549,6 +566,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         case kLogging:
           EnableWindow(GetDlgItem(window, kDebugLogging),
                        IsDlgButtonChecked(window, kLogging) == BST_CHECKED);
+          return 0;
+        case kBackendProxy:
+          UpdateMode(window);
           return 0;
         case kBrowseSource: {
           const auto path = PickFolder(window);
@@ -622,7 +642,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       const auto dpi = state ? state->dpi : 96;
       DrawRoundedPanel(dc, ScaleRect(RECT{28, 109, 732, 350}, dpi), kCard, kBorder,
                        Scale(18, dpi));
-      DrawRoundedPanel(dc, ScaleRect(RECT{28, 360, 732, 712}, dpi), kCard, kBorder,
+      DrawRoundedPanel(dc, ScaleRect(RECT{28, 360, 732, 770}, dpi), kCard, kBorder,
                        Scale(18, dpi));
       if (state) {
         // 永远先覆盖整个状态区域，再绘制一次当前文本。
@@ -671,7 +691,7 @@ int RunPackerGui(HINSTANCE instance) {
   if (!RegisterClassExW(&window_class)) throw Error("Cannot register the packer window");
   const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
   const auto dpi = GetDpiForSystem();
-  RECT bounds{0, 0, Scale(760, dpi), Scale(845, dpi)};
+  RECT bounds{0, 0, Scale(760, dpi), Scale(893, dpi)};
   AdjustWindowRectExForDpi(&bounds, style, FALSE, WS_EX_CONTROLPARENT, dpi);
   const auto window = CreateWindowExW(
       WS_EX_CONTROLPARENT, kClassName, L"lw.Web2App · 网页转 Windows 应用",

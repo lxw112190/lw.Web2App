@@ -15,6 +15,18 @@ struct LoggingConfig {
   std::uint32_t max_files = 5;
 };
 
+// 将页面的同源请求受控转发到一个固定的传统 HTTP 后台。
+// prefix 不暴露任意目标地址，避免把桌面应用变成通用 SSRF 代理。
+struct BackendProxyConfig {
+  bool enabled = false;
+  std::string origin;
+  std::string prefix = "/__lw_proxy__";
+  std::uint32_t connect_timeout_ms = 5000;
+  std::uint32_t read_timeout_ms = 30000;
+  std::uint64_t max_request_size = 16ull * 1024 * 1024;
+  std::uint64_t max_response_size = 64ull * 1024 * 1024;
+};
+
 // 描述生成后桌面应用的运行方式和窗口行为。
 // 该结构与 Payload 中的 manifest.json 一一对应；新增字段必须保持向后兼容。
 struct Manifest {
@@ -32,8 +44,7 @@ struct Manifest {
   bool resizable = true;
   bool fullscreen = true;
   bool devtools = false;
-  // 仅用于必须访问传统 HTTP 后台的旧系统；默认关闭以保留 WebView 安全策略。
-  bool allow_insecure_http = false;
+  BackendProxyConfig backend_proxy;
   bool spa_fallback = true;
   LoggingConfig logging;
   // 仅用于读取 LWWEB001；LWWEB002 的内容摘要存放在 Footer，避免循环依赖。

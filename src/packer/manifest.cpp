@@ -1,6 +1,7 @@
 #include "lwweb/packer/manifest.h"
 
 #include "lwweb/common/error.h"
+#include "lwweb/common/http_origin.h"
 #include "lwweb/common/path_utils.h"
 #include "lwweb/common/sha256.h"
 
@@ -43,6 +44,29 @@ void ValidateManifest(const Manifest& manifest) {
   } else if (!IsSupportedHttpUrl(manifest.url)) {
     throw Error("URL mode requires an http:// or https:// URL");
   }
+  const auto& proxy = manifest.backend_proxy;
+  if (proxy.enabled) {
+    if (manifest.mode != AppMode::Local)
+      throw Error("Backend proxy is available only for local packaged sites");
+    const auto origin = ParseHttpOrigin(proxy.origin);
+    if (!origin || origin->scheme != "http")
+      throw Error("Backend proxy currently requires a valid http:// origin without a path");
+    if (proxy.prefix.size() < 3 || proxy.prefix.size() > 128 ||
+        proxy.prefix.front() != '/' || proxy.prefix.back() == '/' ||
+        !IsCanonicalArchivePath(proxy.prefix.substr(1)))
+      throw Error("Backend proxy prefix is unsafe");
+    if (manifest.start_path == proxy.prefix ||
+        manifest.start_path.rfind(proxy.prefix + "/", 0) == 0)
+      throw Error("Start path conflicts with the backend proxy prefix");
+    if (proxy.connect_timeout_ms < 100 || proxy.connect_timeout_ms > 300000 ||
+        proxy.read_timeout_ms < 100 || proxy.read_timeout_ms > 300000)
+      throw Error("Backend proxy timeout is outside the supported range");
+    if (proxy.max_request_size < 1024 ||
+        proxy.max_request_size > 256ull * 1024 * 1024 ||
+        proxy.max_response_size < 1024 ||
+        proxy.max_response_size > 512ull * 1024 * 1024)
+      throw Error("Backend proxy size limit is outside the supported range");
+  }
   if (!manifest.legacy_payload_sha256.empty()) {
     try {
       (void)ParseHexDigest(manifest.legacy_payload_sha256);
@@ -67,12 +91,19 @@ std::string SerializeManifest(const Manifest& manifest, bool pretty) {
       {"resizable", manifest.resizable},
       {"fullscreen", manifest.fullscreen},
       {"devtools", manifest.devtools},
-      {"allow_insecure_http", manifest.allow_insecure_http},
       {"spa_fallback", manifest.spa_fallback},
       {"logging", {{"enabled", manifest.logging.enabled},
                     {"level", manifest.logging.level},
                     {"max_file_size", manifest.logging.max_file_size},
-                    {"max_files", manifest.logging.max_files}}}};
+                    {"max_files", manifest.logging.max_files}}},
+      {"backend_proxy",
+       {{"enabled", manifest.backend_proxy.enabled},
+        {"origin", manifest.backend_proxy.origin},
+        {"prefix", manifest.backend_proxy.prefix},
+        {"connect_timeout_ms", manifest.backend_proxy.connect_timeout_ms},
+        {"read_timeout_ms", manifest.backend_proxy.read_timeout_ms},
+        {"max_request_size", manifest.backend_proxy.max_request_size},
+        {"max_response_size", manifest.backend_proxy.max_response_size}}}};
   if (!manifest.legacy_payload_sha256.empty())
     value["payload_sha256"] = manifest.legacy_payload_sha256;
   if (manifest.mode == AppMode::Url) value["url"] = manifest.url;
@@ -98,8 +129,19 @@ Manifest ParseManifest(const std::string& json) {
     // Legacy packages did not have this field and should retain their windowed behavior.
     manifest.fullscreen = value.value("fullscreen", false);
     manifest.devtools = value.value("devtools", false);
-    manifest.allow_insecure_http = value.value("allow_insecure_http", false);
     manifest.spa_fallback = value.value("spa_fallback", true);
+    if (const auto proxy = value.find("backend_proxy"); proxy != value.end()) {
+      manifest.backend_proxy.enabled = proxy->value("enabled", false);
+      manifest.backend_proxy.origin = proxy->value("origin", "");
+      manifest.backend_proxy.prefix = proxy->value("prefix", "/__lw_proxy__");
+      manifest.backend_proxy.connect_timeout_ms =
+          proxy->value("connect_timeout_ms", 5000u);
+      manifest.backend_proxy.read_timeout_ms = proxy->value("read_timeout_ms", 30000u);
+      manifest.backend_proxy.max_request_size =
+          proxy->value("max_request_size", 16ull * 1024 * 1024);
+      manifest.backend_proxy.max_response_size =
+          proxy->value("max_response_size", 64ull * 1024 * 1024);
+    }
     if (const auto logging = value.find("logging"); logging != value.end()) {
       manifest.logging.enabled = logging->value("enabled", true);
       manifest.logging.level = logging->value("level", "info");

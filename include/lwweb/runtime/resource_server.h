@@ -19,6 +19,7 @@ class Server;
 namespace lwweb {
 
 class Logger;
+class BackendProxy;
 
 // 为同一 app_id 选择稳定的动态端口，使浏览器 origin 跨重启保持不变。
 // 端口位于 IANA dynamic/private 范围 49152-65535。
@@ -63,6 +64,7 @@ class ResourceServer {
   LoadedPayload payload_;
   SecurityLimits limits_;
   std::unique_ptr<ZipResourceStore> store_;
+  std::unique_ptr<BackendProxy> backend_proxy_;
   std::unique_ptr<httplib::Server> server_;
   std::thread thread_;
   int port_ = 0;

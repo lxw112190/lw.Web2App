@@ -34,6 +34,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - GUI 自动扫描并稳定排序 `.html`/`.htm` 启动页；Manifest、GUI 与 CLI 分别用 `entry` 和 `start_path` 支持传统多页面入口及 SPA 初始路由。
 - 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
 - Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
+- 可选的受控后台代理把 `/__lw_proxy__/...` 同源请求转发到 Manifest 固定的传统 HTTP Origin，不需要关闭 WebView 安全策略，Windows 与 Linux 共用同一实现。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
 - 拒绝绝对路径、盘符、`..`、NUL、重复 ZIP 路径。
 - 限制资源数量、单文件大小和总解压大小，降低 ZIP 炸弹风险。
@@ -60,11 +61,24 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 2. Runner 检查所有偏移和长度是否位于当前 PE/ELF 文件内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。校验失败时拒绝打开嵌入内容。
 3. 本地模式只读取 ZIP 中央目录建立索引，不会把网站完整解压到磁盘或一次性载入内存。
 4. Runner 先通过 Windows Named Mutex 或 Linux `flock` 获取 `app_id` 专属单实例锁，再在 `127.0.0.1` 的稳定首选端口启动 HTTP 服务。服务严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback；首选端口被无关进程占用时会尝试确定性的备用端口并写入日志。
-5. 小型热点资源进入 32 MiB LRU 缓存；大文件按请求读取，不长期占用内存。
-6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。本地模式把私有服务地址与 Manifest 的 `start_path` 组合后导航；请求文件不存在且启用了 SPA fallback 时返回 `entry`。因此传统多页面应用可使用 `entry=login.html`、`start_path=/login.html`，Vue/React history 路由可使用 `entry=index.html`、`start_path=/login`。旧包没有 `start_path` 时默认使用 `/`。窗口策略同样来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
-7. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
+5. 如果 Manifest 启用了 `backend_proxy`，本地服务会在静态资源之前匹配 `/__lw_proxy__/`。它只向固定 `origin` 转发 GET、HEAD、POST、PUT、PATCH、DELETE 和 OPTIONS，保留查询参数及请求体，并改写 Cookie 与同源重定向；网页不会直接连接局域网后台。
+6. 小型热点资源进入 32 MiB LRU 缓存；大文件按请求读取，不长期占用内存。
+7. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。本地模式把私有服务地址与 Manifest 的 `start_path` 组合后导航；请求文件不存在且启用了 SPA fallback 时返回 `entry`。因此传统多页面应用可使用 `entry=login.html`、`start_path=/login.html`，Vue/React history 路由可使用 `entry=index.html`、`start_path=/login`。旧包没有 `start_path` 时默认使用 `/`。窗口策略同样来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
+8. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
 
 `WebView2` 目录是 Microsoft WebView2 所需的可写用户数据目录，保存 Cookie、登录状态、localStorage、IndexedDB、HTTP 缓存、Service Worker 和站点权限。它不能在保持完整浏览器功能的同时彻底取消；显式放在 `%LOCALAPPDATA%` 可以避免 EXE 位于 `Program Files` 等只读目录时启动失败。应用完全退出后可以删除该目录来重置网页数据，但下一次启动仍会自动创建。
+
+### 兼容旧式 HTTP 后台
+
+勾选“兼容旧式 HTTP 后台”并填写固定后台地址后，Runtime 会启用受控反向代理。例如后台地址为 `http://192.0.2.10:8080` 时，前端需要把原来的绝对基地址改为（`192.0.2.0/24` 是专供文档使用的保留网段）：
+
+```javascript
+const apiBase = "/__lw_proxy__";
+```
+
+于是 `/__lw_proxy__/sysUser/login` 由 C++ Runtime 转发为 `http://192.0.2.10:8080/sysUser/login`。页面看到的请求仍与 `127.0.0.1` 页面同源，因此不依赖 CORS、PNA 或 `--disable-web-security`。代理固定目标 Host、拒绝跨站来源与跨 Host 重定向，过滤 hop-by-hop/代理认证 Header，限制请求体为 16 MiB、响应体为 64 MiB，并把后端 Cookie 限定到代理前缀。日志只记录方法、不含查询参数的路径、状态和耗时，不记录密码、Cookie、Authorization、查询参数或请求体。
+
+当前版本只支持 `http://` 后台，适用于可信局域网老系统；`https://` 代理、WebSocket、NTLM/Kerberos 和多个后台 Origin 暂未支持。硬编码绝对后台地址的旧项目仍需将基地址改为 `/__lw_proxy__`，工具不会自动重写压缩后的 JavaScript。
 
 SHA-256 用于发现资源损坏或修改，不等同于发布者认证；Manifest 配置和整个 EXE 的可信发布仍应依靠 Authenticode 等代码签名机制。
 
@@ -234,6 +248,7 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --height 800 `
   --windowed `
   --debug-log `
+  --backend-origin http://192.0.2.10:8080 `
   --icon .\app.png `
   --company "示例公司" `
   --version 1.2.0.0 `
@@ -266,7 +281,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 
 - `--entry`：指定归档内真实入口 HTML，例如 `login.html` 或 `pages/login.html`。
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
-- `--allow-insecure-http`：允许 Windows WebView2 页面访问传统明文 HTTP 后台。GUI 中对应“HTTP 后台兼容”；默认关闭，仅应在无法升级为 HTTPS 的可信内网旧系统中启用。
+- `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
 - `--no-log`：关闭生成应用的运行日志。
@@ -307,6 +322,7 @@ Footer             固定 80 字节
 - 默认总解压大小最大 2 GiB。
 - Manifest 最大 1 MiB。
 - HTTP 服务仅绑定 IPv4 loopback，且必须提供精确的应用专属端口 Host。
+- 后台代理只接受 Manifest 固定的 `http://` Origin；拒绝任意 URL、跨站来源、跨 Host 重定向和与代理前缀冲突的 ZIP 资源，并限制请求/响应大小与超时。
 - SHA-256 可以检测损坏或修改，但不能验证发布者身份；数字签名属于后续规划。
 
 ## 项目结构
@@ -317,7 +333,7 @@ src/app/       Windows Win32 GUI、Runtime 和程序入口
 src/linux/     Linux GTK3 GUI、WebKitGTK Runtime 和程序入口
 src/webview/   WebView2 宿主
 src/packer/    Manifest、Payload 和打包器
-src/runtime/   ZIP 资源读取、LRU 和本地 HTTP 服务
+src/runtime/   ZIP 资源读取、LRU、本地 HTTP 服务和受控后台代理
 src/pe/        图标和版本资源更新
 src/common/    文件、路径和 SHA-256 工具
 tests/         单元测试与打包/读取集成测试
@@ -355,7 +371,7 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 - 仅支持 Ubuntu 22.04/24.04 x86_64；生成应用必须在相同平台家族运行，不能把 Windows EXE 直接拿到 Linux，也不能跨平台生成另一端 Runner。
 - 生成结果是带 Payload 的单文件 ELF；lw.Web2App 工具本身提供 `.deb`/`.tar.gz`，但尚未为每个任意生成应用制作独立 DEB、desktop 文件和图标。
 - 使用系统 WebKitGTK 4.1，不捆绑浏览器内核，因此安全更新与 Web API 兼容性跟随 Ubuntu 更新。
-- GTK 界面打包过程当前同步执行；超大型项目的后台任务、取消和进度百分比属于后续改进。
+- GTK 与 Win32 图形打包器都在后台线程压缩资源，界面在大型项目打包期间保持响应；取消操作和进度百分比属于后续改进。
 
 下一阶段优先增加生成应用的 desktop/图标/DEB 元数据、AppImage 可行性、外部链接与下载策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
 

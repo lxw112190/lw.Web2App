@@ -3,6 +3,7 @@
 #include "lwweb/common/error.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
+#include "lwweb/runtime/backend_proxy.h"
 
 #include <httplib.h>
 #include <miniz.h>
@@ -10,8 +11,17 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <regex>
 
 namespace lwweb {
+namespace {
+
+std::string RegexEscape(const std::string& value) {
+  static const std::regex special(R"([.^$|()\[\]{}*+?\\])");
+  return std::regex_replace(value, special, R"(\$&)");
+}
+
+}  // namespace
 
 std::uint16_t StableAppPort(const std::string& app_id) {
   // Stable FNV-1a avoids std::hash's implementation-defined result while
@@ -81,6 +91,11 @@ struct ZipResourceStore::Impl {
         throw Error("ZIP exceeds the total uncompressed size limit");
       total += stat.m_uncomp_size;
       if (!entries.emplace(*normalized, i).second) throw Error("ZIP contains duplicate paths");
+      if (payload.manifest.backend_proxy.enabled) {
+        const auto reserved = payload.manifest.backend_proxy.prefix.substr(1);
+        if (*normalized == reserved || normalized->rfind(reserved + "/", 0) == 0)
+          throw Error("ZIP resource conflicts with the backend proxy prefix");
+      }
     }
   }
 
@@ -135,8 +150,14 @@ ResourceServer::~ResourceServer() { Stop(); }
 std::string ResourceServer::Start() {
   if (thread_.joinable()) return "http://127.0.0.1:" + std::to_string(port_) + "/";
   store_ = std::make_unique<ZipResourceStore>(payload_, limits_, logger_);
+  if (payload_.manifest.backend_proxy.enabled)
+    backend_proxy_ =
+        std::make_unique<BackendProxy>(payload_.manifest.backend_proxy, logger_);
   const auto make_server = [this] {
     auto server = std::make_unique<httplib::Server>();
+    // cpp-httplib 默认按 CPU 核数创建线程；桌面应用使用固定小线程池可避免高核数机器
+    // 为每个生成应用预留过多线程，同时仍允许同步 XHR 与多个静态资源并发。
+    server->new_task_queue = [] { return new httplib::ThreadPool(8); };
 #ifdef _WIN32
     // Windows 的 SO_REUSEADDR 允许第二个进程绑定同一端口，会破坏 Host/origin
     // 隔离。独占绑定让端口冲突可靠失败，再由候选端口逻辑处理回退。
@@ -149,8 +170,33 @@ std::string ResourceServer::Start() {
     // 本地应用端口不需要 SO_REUSEPORT；保持独占可可靠检测其他进程占用。
     server->set_socket_options([](auto) {});
 #endif
-    server->set_payload_max_length(1024);
-    server->Get("/health", [](const httplib::Request&, httplib::Response& response) {
+    server->set_payload_max_length(backend_proxy_
+                                       ? static_cast<std::size_t>(
+                                             payload_.manifest.backend_proxy.max_request_size)
+                                       : 1024u);
+    if (backend_proxy_) {
+      const auto pattern = "^" +
+                           RegexEscape(payload_.manifest.backend_proxy.prefix) +
+                           "(?:/.*)?$";
+      const auto handler = [this](const httplib::Request& request,
+                                  httplib::Response& response) {
+        backend_proxy_->Handle(request, response,
+                               static_cast<std::uint16_t>(port_));
+      };
+      server->Get(pattern, handler);
+      server->Post(pattern, handler);
+      server->Put(pattern, handler);
+      server->Patch(pattern, handler);
+      server->Delete(pattern, handler);
+      server->Options(pattern, handler);
+    }
+    server->Get("/health", [this](const httplib::Request& request,
+                                  httplib::Response& response) {
+      if (!IsExpectedResourceHost(request.get_header_value("Host"),
+                                  static_cast<std::uint16_t>(port_))) {
+        response.status = 403;
+        return;
+      }
       response.set_content("ok", "text/plain; charset=utf-8");
       response.set_header("Cache-Control", "no-store");
     });
@@ -214,6 +260,9 @@ std::string ResourceServer::Start() {
   thread_ = std::thread([this] { server_->listen_after_bind(); });
   server_->wait_until_ready();
   if (logger_) logger_->Info("Resource server: 127.0.0.1:" + std::to_string(port_));
+  if (logger_ && backend_proxy_)
+    logger_->Info("Backend proxy: " + payload_.manifest.backend_proxy.prefix + " -> " +
+                  payload_.manifest.backend_proxy.origin);
   return "http://127.0.0.1:" + std::to_string(port_) + "/";
 }
 
@@ -221,6 +270,7 @@ void ResourceServer::Stop() {
   if (server_) server_->stop();
   if (thread_.joinable()) thread_.join();
   server_.reset();
+  backend_proxy_.reset();
   store_.reset();
   port_ = 0;
 }

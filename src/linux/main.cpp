@@ -264,6 +264,8 @@ struct GuiState {
   GtkWidget* spa{};
   GtkWidget* logging{};
   GtkWidget* debug{};
+  GtkWidget* backend_proxy{};
+  GtkWidget* backend_origin{};
   GtkWidget* output{};
   GtkWidget* status{};
   GtkWidget* pack{};
@@ -370,6 +372,18 @@ void OnModeChanged(GtkToggleButton*, gpointer data) {
   gtk_widget_set_sensitive(state->entry, local);
   gtk_widget_set_sensitive(state->start_path, local);
   gtk_widget_set_sensitive(state->spa, local);
+  gtk_widget_set_sensitive(state->backend_proxy, local);
+  gtk_widget_set_sensitive(
+      state->backend_origin,
+      local && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->backend_proxy)));
+}
+
+void OnBackendProxyChanged(GtkToggleButton*, gpointer data) {
+  auto* state = static_cast<GuiState*>(data);
+  const bool local = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->local_radio));
+  gtk_widget_set_sensitive(
+      state->backend_origin,
+      local && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->backend_proxy)));
 }
 
 void ShowError(GtkWidget* parent, const std::string& message) {
@@ -435,6 +449,10 @@ void OnPack(GtkButton*, gpointer data) {
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->logging));
     options.manifest.logging.level =
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->debug)) ? "debug" : "info";
+    options.manifest.backend_proxy.enabled =
+        local && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->backend_proxy));
+    if (options.manifest.backend_proxy.enabled)
+      options.manifest.backend_proxy.origin = EntryText(state->backend_origin);
     options.progress = [state](const std::string& message) {
       g_idle_add(ApplyProgressUpdate, new GuiProgressUpdate{state, message});
     };
@@ -478,7 +496,7 @@ int RunPackerGui() {
   auto state = std::make_unique<GuiState>();
   state->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(state->window), "lw.Web2App - Linux 网页应用打包器");
-  gtk_window_set_default_size(GTK_WINDOW(state->window), 760, 680);
+  gtk_window_set_default_size(GTK_WINDOW(state->window), 760, 740);
   gtk_container_set_border_width(GTK_CONTAINER(state->window), 24);
 
   auto* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
@@ -530,6 +548,7 @@ int RunPackerGui() {
   state->spa = gtk_check_button_new_with_label("启用 SPA fallback");
   state->logging = gtk_check_button_new_with_label("启用运行日志");
   state->debug = gtk_check_button_new_with_label("详细日志（DEBUG）");
+  state->backend_proxy = gtk_check_button_new_with_label("兼容旧式 HTTP 后台");
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->fullscreen), TRUE);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->resizable), TRUE);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->spa), TRUE);
@@ -540,11 +559,17 @@ int RunPackerGui() {
   gtk_box_pack_start(GTK_BOX(checks), state->spa, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(checks), state->logging, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(checks), state->debug, FALSE, FALSE, 0);
+  gtk_box_pack_start(GTK_BOX(checks), state->backend_proxy, FALSE, FALSE, 0);
   AttachRow(grid, 6, "运行选项", checks);
+  state->backend_origin = gtk_entry_new();
+  gtk_entry_set_placeholder_text(GTK_ENTRY(state->backend_origin),
+                                 "例如：http://192.0.2.10:8080");
+  gtk_widget_set_sensitive(state->backend_origin, FALSE);
+  AttachRow(grid, 7, "后台地址", state->backend_origin);
   state->output = gtk_entry_new();
   gtk_entry_set_text(GTK_ENTRY(state->output), DefaultOutputPath().c_str());
   auto* browse_output = gtk_button_new_with_label("浏览…");
-  AttachRow(grid, 7, "输出文件", state->output, browse_output);
+  AttachRow(grid, 8, "输出文件", state->output, browse_output);
 
   state->pack = gtk_button_new_with_label("生成 Linux 应用");
   gtk_widget_set_name(state->pack, "primary-button");
@@ -572,6 +597,8 @@ int RunPackerGui() {
   g_signal_connect(state->entry, "changed", G_CALLBACK(OnEntryChanged), state.get());
   g_signal_connect(browse_output, "clicked", G_CALLBACK(OnBrowseOutput), state.get());
   g_signal_connect(state->local_radio, "toggled", G_CALLBACK(OnModeChanged), state.get());
+  g_signal_connect(state->backend_proxy, "toggled", G_CALLBACK(OnBackendProxyChanged),
+                   state.get());
   g_signal_connect(state->pack, "clicked", G_CALLBACK(OnPack), state.get());
   RefreshHtmlEntries(state.get());
   gtk_widget_show_all(state->window);

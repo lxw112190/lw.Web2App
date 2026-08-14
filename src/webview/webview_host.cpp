@@ -6,7 +6,6 @@
 #include "lwweb/common/sha256.h"
 
 #include <ShlObj.h>
-#include <WebView2EnvironmentOptions.h>
 
 #include <filesystem>
 #include <iterator>
@@ -53,17 +52,8 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
   on_error_ = std::move(on_error);
   logger_ = logger;
   user_data_folder_ = UserDataFolder(manifest_);
-  Microsoft::WRL::ComPtr<CoreWebView2EnvironmentOptions> environment_options;
-  if (manifest_.allow_insecure_http) {
-    environment_options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-    environment_options->put_AdditionalBrowserArguments(
-        L"--allow-running-insecure-content");
-    if (logger_)
-      logger_->Warn(
-          "Legacy HTTP backend compatibility enabled; insecure mixed content is allowed");
-  }
   const HRESULT started = CreateCoreWebView2EnvironmentWithOptions(
-      nullptr, user_data_folder_.c_str(), environment_options.Get(),
+      nullptr, user_data_folder_.c_str(), nullptr,
       Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
           [this](HRESULT result, ICoreWebView2Environment* environment) -> HRESULT {
             if (FAILED(result) || !environment) {

@@ -1,4 +1,5 @@
 #include "lwweb/common/path_utils.h"
+#include "lwweb/common/http_origin.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -47,6 +48,15 @@ void RunPathTests() {
   Check(lwweb::MimeTypeForPath("dotnet.wasm") == "application/wasm", "WASM MIME");
   Check(lwweb::IsSupportedHttpUrl("https://example.com"), "HTTPS URL accepted");
   Check(!lwweb::IsSupportedHttpUrl("file:///tmp/a"), "file URL rejected");
+  const auto backend_origin = lwweb::ParseHttpOrigin("http://192.0.2.10:8080/");
+  Check(backend_origin && backend_origin->host == "192.0.2.10" &&
+            backend_origin->port == 8080 &&
+            backend_origin->ToString() == "http://192.0.2.10:8080",
+        "backend HTTP origin is parsed and normalized");
+  Check(!lwweb::ParseHttpOrigin("http://host:8080/api"),
+        "backend origin path is rejected");
+  Check(!lwweb::ParseHttpOrigin("http://user:password@host"),
+        "backend origin user info is rejected");
 
   const auto root = std::filesystem::temp_directory_path() / "lwweb-entry-list-test";
   std::error_code ignored;

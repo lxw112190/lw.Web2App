@@ -25,12 +25,15 @@ void RunCliTests() {
   Check(command.pack.manifest.logging.level == "debug", "debug logging parsed");
   Check(command.pack.manifest.devtools, "devtools option parsed");
 
-  const auto legacy_http_command = lwweb::ParseCommandLine(
+  const auto proxy_command = lwweb::ParseCommandLine(
       {"lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
-       "--allow-insecure-http"},
+       "--backend-origin", "http://192.0.2.10:8080"},
       "runner.exe");
-  Check(legacy_http_command.pack.manifest.allow_insecure_http,
-        "legacy HTTP compatibility option parsed");
+  Check(proxy_command.pack.manifest.backend_proxy.enabled,
+        "controlled backend proxy option parsed");
+  Check(proxy_command.pack.manifest.backend_proxy.origin ==
+            "http://192.0.2.10:8080",
+        "backend proxy origin parsed");
 
   const std::vector<std::string> local_args = {
       "lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
@@ -73,4 +76,7 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--start-path") !=
             std::string::npos,
         "help includes start path option");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--backend-origin") !=
+            std::string::npos,
+        "help includes controlled backend proxy option");
 }
