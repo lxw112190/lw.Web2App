@@ -12,7 +12,10 @@
 #include <commdlg.h>
 
 #include <filesystem>
+#include <memory>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace lwweb {
@@ -42,6 +45,7 @@ enum ControlId {
   kResizable,
   kFullscreen,
   kSpa,
+  kAllowInsecureHttp,
   kLogging,
   kDebugLogging,
   kIcon,
@@ -80,6 +84,15 @@ struct State {
 };
 
 constexpr RECT kStatusRect{48, 795, 712, 821};
+constexpr UINT kPackProgressMessage = WM_APP + 1;
+constexpr UINT kPackFinishedMessage = WM_APP + 2;
+
+// 工作线程只写入该结果对象，窗口线程负责显示消息并恢复控件状态。
+struct PackResult {
+  bool success = false;
+  std::filesystem::path output;
+  std::wstring error;
+};
 
 int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), 96); }
 
@@ -305,9 +318,6 @@ void UpdateMode(HWND window) {
 void Pack(HWND window) {
   auto* state = reinterpret_cast<State*>(GetWindowLongPtrW(window, GWLP_USERDATA));
   if (!state || state->busy) return;
-  state->busy = true;
-  EnableWindow(GetDlgItem(window, kPack), FALSE);
-  SetWindowTextW(GetDlgItem(window, kPack), L"正在生成…");
   try {
     PackOptions options;
     options.runner = CurrentExecutablePath();
@@ -318,6 +328,8 @@ void Pack(HWND window) {
     options.manifest.resizable = IsDlgButtonChecked(window, kResizable) == BST_CHECKED;
     options.manifest.fullscreen = IsDlgButtonChecked(window, kFullscreen) == BST_CHECKED;
     options.manifest.spa_fallback = IsDlgButtonChecked(window, kSpa) == BST_CHECKED;
+    options.manifest.allow_insecure_http =
+        IsDlgButtonChecked(window, kAllowInsecureHttp) == BST_CHECKED;
     options.manifest.logging.enabled = IsDlgButtonChecked(window, kLogging) == BST_CHECKED;
     options.manifest.logging.level =
         IsDlgButtonChecked(window, kDebugLogging) == BST_CHECKED ? "debug" : "info";
@@ -334,26 +346,40 @@ void Pack(HWND window) {
       options.manifest.entry = WideToUtf8(Text(window, kEntry));
       options.manifest.start_path = WideToUtf8(Text(window, kStartPath));
     }
+    state->busy = true;
+    EnableWindow(GetDlgItem(window, kPack), FALSE);
+    SetWindowTextW(GetDlgItem(window, kPack), L"正在生成…");
+    SetStatus(window, L"正在准备打包任务…");
     options.progress = [window](const std::string& message) {
-      SetStatus(window, LocalizeProgress(message));
-      MSG event{};
-      while (PeekMessageW(&event, nullptr, 0, 0, PM_REMOVE)) {
-        TranslateMessage(&event);
-        DispatchMessageW(&event);
-      }
+      auto update = std::make_unique<std::wstring>(LocalizeProgress(message));
+      if (PostMessageW(window, kPackProgressMessage, 0,
+                       reinterpret_cast<LPARAM>(update.get())))
+        update.release();
     };
-    PackApplication(options);
-    MessageBoxW(window, (L"EXE 已成功生成：\n\n" + options.output.wstring()).c_str(),
-                L"lw.Web2App", MB_OK | MB_ICONINFORMATION);
+    std::thread([window, options = std::move(options)]() mutable {
+      auto result = std::make_unique<PackResult>();
+      result->output = options.output;
+      try {
+        PackApplication(options);
+        result->success = true;
+      } catch (const std::exception& error) {
+        result->error = Utf8ToWide(error.what());
+      } catch (...) {
+        result->error = L"发生未知打包错误";
+      }
+      if (PostMessageW(window, kPackFinishedMessage, 0,
+                       reinterpret_cast<LPARAM>(result.get())))
+        result.release();
+    }).detach();
   } catch (const std::exception& error) {
     const auto message = Utf8ToWide(error.what());
     SetStatus(window, L"生成失败：" + message);
     MessageBoxW(window, message.c_str(), L"生成失败", MB_OK | MB_ICONERROR);
+    state->busy = false;
+    EnableWindow(GetDlgItem(window, kPack), TRUE);
+    SetWindowTextW(GetDlgItem(window, kPack), L"生成 Windows EXE");
+    InvalidateRect(GetDlgItem(window, kPack), nullptr, TRUE);
   }
-  state->busy = false;
-  EnableWindow(GetDlgItem(window, kPack), TRUE);
-  SetWindowTextW(GetDlgItem(window, kPack), L"生成 Windows EXE");
-  InvalidateRect(GetDlgItem(window, kPack), nullptr, TRUE);
 }
 
 void DrawRoundedPanel(HDC dc, RECT rect, COLORREF fill, COLORREF border, int radius) {
@@ -446,9 +472,11 @@ void BuildInterface(State& state) {
   AddLabel(state, L"应用图标（PNG / ICO，可选）", 48, 563, 240, 22, 0,
            state.small_font);
   AddControl(state, L"BUTTON", L"启用运行日志", WS_TABSTOP | BS_AUTOCHECKBOX,
-             330, 560, 140, 26, kLogging);
+             310, 560, 140, 26, kLogging);
   AddControl(state, L"BUTTON", L"详细日志", WS_TABSTOP | BS_AUTOCHECKBOX,
-             500, 560, 110, 26, kDebugLogging);
+             466, 560, 100, 26, kDebugLogging);
+  AddControl(state, L"BUTTON", L"HTTP 后台兼容", WS_TABSTOP | BS_AUTOCHECKBOX,
+             570, 560, 122, 26, kAllowInsecureHttp);
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
   AddEdit(state, L"", 48, 587, 548, kIcon, L"留空则使用默认图标");
   AddButton(state, L"选择图标", 610, 587, 102, 34, kBrowseIcon);
@@ -488,6 +516,29 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
                      RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
       }
       return 0;
+    case kPackProgressMessage: {
+      std::unique_ptr<std::wstring> update(reinterpret_cast<std::wstring*>(lparam));
+      if (update) SetStatus(window, *update);
+      return 0;
+    }
+    case kPackFinishedMessage: {
+      std::unique_ptr<PackResult> result(reinterpret_cast<PackResult*>(lparam));
+      if (!state || !result) return 0;
+      state->busy = false;
+      EnableWindow(GetDlgItem(window, kPack), TRUE);
+      SetWindowTextW(GetDlgItem(window, kPack), L"生成 Windows EXE");
+      InvalidateRect(GetDlgItem(window, kPack), nullptr, TRUE);
+      if (result->success) {
+        SetStatus(window, L"生成完成，可以运行目标 EXE。");
+        MessageBoxW(window,
+                    (L"EXE 已成功生成：\n\n" + result->output.wstring()).c_str(),
+                    L"lw.Web2App", MB_OK | MB_ICONINFORMATION);
+      } else {
+        SetStatus(window, L"生成失败：" + result->error);
+        MessageBoxW(window, result->error.c_str(), L"生成失败", MB_OK | MB_ICONERROR);
+      }
+      return 0;
+    }
     case WM_COMMAND:
       if (!state) break;
       switch (LOWORD(wparam)) {
@@ -550,6 +601,13 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     }
     case WM_ERASEBKGND:
       return TRUE;
+    case WM_CLOSE:
+      if (state && state->busy) {
+        MessageBoxW(window, L"正在生成应用，请等待任务完成后再关闭窗口。",
+                    L"lw.Web2App", MB_OK | MB_ICONINFORMATION);
+        return 0;
+      }
+      break;
     case WM_PAINT: {
       PAINTSTRUCT paint{};
       const auto dc = BeginPaint(window, &paint);

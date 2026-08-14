@@ -64,6 +64,8 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。本地模式把私有服务地址与 Manifest 的 `start_path` 组合后导航；请求文件不存在且启用了 SPA fallback 时返回 `entry`。因此传统多页面应用可使用 `entry=login.html`、`start_path=/login.html`，Vue/React history 路由可使用 `entry=index.html`、`start_path=/login`。旧包没有 `start_path` 时默认使用 `/`。窗口策略同样来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
 7. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
 
+`WebView2` 目录是 Microsoft WebView2 所需的可写用户数据目录，保存 Cookie、登录状态、localStorage、IndexedDB、HTTP 缓存、Service Worker 和站点权限。它不能在保持完整浏览器功能的同时彻底取消；显式放在 `%LOCALAPPDATA%` 可以避免 EXE 位于 `Program Files` 等只读目录时启动失败。应用完全退出后可以删除该目录来重置网页数据，但下一次启动仍会自动创建。
+
 SHA-256 用于发现资源损坏或修改，不等同于发布者认证；Manifest 配置和整个 EXE 的可信发布仍应依靠 Authenticode 等代码签名机制。
 
 ## 日志与排障
@@ -214,7 +216,7 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
 
 ### 打包本地静态目录
 
-GUI 和 CLI 都会扫描 `.html`/`.htm`，稳定排序并优先选择根目录的 `index.html`。`entry` 表示 ZIP 中真实存在的 HTML，`start_path` 表示 WebView 首次打开的 URL 路径：
+GUI 和 CLI 只扫描所选目录第一层的 `.html`/`.htm`，稳定排序并优先选择 `index.html`，不会把子目录中的业务页面误选为启动页。`entry` 表示 ZIP 中真实存在的 HTML，`start_path` 表示 WebView 首次打开的 URL 路径：
 
 ```powershell
 lw.Web2App.exe pack .\dist .\MyApp.exe --title "我的应用"
@@ -264,6 +266,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 
 - `--entry`：指定归档内真实入口 HTML，例如 `login.html` 或 `pages/login.html`。
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
+- `--allow-insecure-http`：允许 Windows WebView2 页面访问传统明文 HTTP 后台。GUI 中对应“HTTP 后台兼容”；默认关闭，仅应在无法升级为 HTTPS 的可信内网旧系统中启用。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
 - `--no-log`：关闭生成应用的运行日志。

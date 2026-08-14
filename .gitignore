@@ -9,6 +9,7 @@
 /out/
 /dist/
 /integration/
+/AGENTS.md
 /.vs/
 /.idea/
 *.user

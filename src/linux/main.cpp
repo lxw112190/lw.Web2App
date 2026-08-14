@@ -18,6 +18,8 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace lwweb {
@@ -265,6 +267,19 @@ struct GuiState {
   GtkWidget* output{};
   GtkWidget* status{};
   GtkWidget* pack{};
+  bool busy = false;
+};
+
+struct GuiProgressUpdate {
+  GuiState* state{};
+  std::string message;
+};
+
+struct GuiPackResult {
+  GuiState* state{};
+  bool success = false;
+  std::string output;
+  std::string error;
 };
 
 const char* EntryText(GtkWidget* entry) { return gtk_entry_get_text(GTK_ENTRY(entry)); }
@@ -306,7 +321,6 @@ void SetStatus(GuiState* state, const std::string& message, bool error = false) 
   auto* context = gtk_widget_get_style_context(state->status);
   gtk_style_context_remove_class(context, error ? "success" : "error");
   gtk_style_context_add_class(context, error ? "error" : "success");
-  while (gtk_events_pending()) gtk_main_iteration();
 }
 
 void ChoosePath(GtkWidget* parent, GtkWidget* entry, GtkFileChooserAction action,
@@ -366,9 +380,35 @@ void ShowError(GtkWidget* parent, const std::string& message) {
   gtk_widget_destroy(dialog);
 }
 
+gboolean ApplyProgressUpdate(gpointer data) {
+  std::unique_ptr<GuiProgressUpdate> update(static_cast<GuiProgressUpdate*>(data));
+  SetStatus(update->state, update->message);
+  return G_SOURCE_REMOVE;
+}
+
+gboolean ApplyPackResult(gpointer data) {
+  std::unique_ptr<GuiPackResult> result(static_cast<GuiPackResult*>(data));
+  result->state->busy = false;
+  gtk_widget_set_sensitive(result->state->pack, TRUE);
+  if (result->success) {
+    SetStatus(result->state, "生成成功：" + result->output);
+  } else {
+    SetStatus(result->state, "生成失败：" + result->error, true);
+    ShowError(result->state->window, result->error);
+  }
+  return G_SOURCE_REMOVE;
+}
+
+gboolean OnPackerDelete(GtkWidget*, GdkEvent*, gpointer data) {
+  auto* state = static_cast<GuiState*>(data);
+  if (!state->busy) return FALSE;
+  SetStatus(state, "正在生成应用，请等待任务完成后再关闭窗口。");
+  return TRUE;
+}
+
 void OnPack(GtkButton*, gpointer data) {
   auto* state = static_cast<GuiState*>(data);
-  gtk_widget_set_sensitive(state->pack, FALSE);
+  if (state->busy) return;
   try {
     PackOptions options;
     options.runner = CurrentExecutablePath();
@@ -395,15 +435,32 @@ void OnPack(GtkButton*, gpointer data) {
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->logging));
     options.manifest.logging.level =
         gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->debug)) ? "debug" : "info";
-    options.progress = [state](const std::string& message) { SetStatus(state, message); };
+    options.progress = [state](const std::string& message) {
+      g_idle_add(ApplyProgressUpdate, new GuiProgressUpdate{state, message});
+    };
+    state->busy = true;
+    gtk_widget_set_sensitive(state->pack, FALSE);
     SetStatus(state, "正在生成 Linux 应用…");
-    PackApplication(options);
-    SetStatus(state, "生成成功：" + options.output.string());
+    std::thread([state, options = std::move(options)]() mutable {
+      auto result = std::make_unique<GuiPackResult>();
+      result->state = state;
+      result->output = options.output.string();
+      try {
+        PackApplication(options);
+        result->success = true;
+      } catch (const std::exception& error) {
+        result->error = error.what();
+      } catch (...) {
+        result->error = "发生未知打包错误";
+      }
+      g_idle_add(ApplyPackResult, result.release());
+    }).detach();
   } catch (const std::exception& error) {
+    state->busy = false;
     SetStatus(state, "生成失败：" + std::string(error.what()), true);
     ShowError(state->window, error.what());
+    gtk_widget_set_sensitive(state->pack, TRUE);
   }
-  gtk_widget_set_sensitive(state->pack, TRUE);
 }
 
 void AttachRow(GtkGrid* grid, int row, const char* label, GtkWidget* widget,
@@ -509,6 +566,7 @@ int RunPackerGui() {
   g_object_unref(css);
 
   g_signal_connect(state->window, "destroy", G_CALLBACK(OnRuntimeDestroy), nullptr);
+  g_signal_connect(state->window, "delete-event", G_CALLBACK(OnPackerDelete), state.get());
   g_signal_connect(state->browse_source, "clicked", G_CALLBACK(OnBrowseSource), state.get());
   g_signal_connect(state->source, "focus-out-event", G_CALLBACK(OnSourceFocusOut), state.get());
   g_signal_connect(state->entry, "changed", G_CALLBACK(OnEntryChanged), state.get());

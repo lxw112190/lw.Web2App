@@ -86,7 +86,7 @@ std::string MimeTypeForPath(const std::string& path) {
 std::vector<std::string> FindHtmlEntries(const std::filesystem::path& root) {
   if (!std::filesystem::is_directory(root)) throw Error("Source is not a directory");
   std::vector<std::string> entries;
-  for (const auto& item : std::filesystem::recursive_directory_iterator(root)) {
+  for (const auto& item : std::filesystem::directory_iterator(root)) {
     if (!item.is_regular_file()) continue;
     auto extension = item.path().extension().u8string();
     std::transform(extension.begin(), extension.end(), extension.begin(),

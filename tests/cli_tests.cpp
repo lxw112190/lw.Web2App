@@ -25,6 +25,13 @@ void RunCliTests() {
   Check(command.pack.manifest.logging.level == "debug", "debug logging parsed");
   Check(command.pack.manifest.devtools, "devtools option parsed");
 
+  const auto legacy_http_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
+       "--allow-insecure-http"},
+      "runner.exe");
+  Check(legacy_http_command.pack.manifest.allow_insecure_http,
+        "legacy HTTP compatibility option parsed");
+
   const std::vector<std::string> local_args = {
       "lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
       "--start-path", "/login"};

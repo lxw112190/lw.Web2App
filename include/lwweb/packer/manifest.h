@@ -32,6 +32,8 @@ struct Manifest {
   bool resizable = true;
   bool fullscreen = true;
   bool devtools = false;
+  // 仅用于必须访问传统 HTTP 后台的旧系统；默认关闭以保留 WebView 安全策略。
+  bool allow_insecure_http = false;
   bool spa_fallback = true;
   LoggingConfig logging;
   // 仅用于读取 LWWEB001；LWWEB002 的内容摘要存放在 Footer，避免循环依赖。

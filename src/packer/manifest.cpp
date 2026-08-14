@@ -67,6 +67,7 @@ std::string SerializeManifest(const Manifest& manifest, bool pretty) {
       {"resizable", manifest.resizable},
       {"fullscreen", manifest.fullscreen},
       {"devtools", manifest.devtools},
+      {"allow_insecure_http", manifest.allow_insecure_http},
       {"spa_fallback", manifest.spa_fallback},
       {"logging", {{"enabled", manifest.logging.enabled},
                     {"level", manifest.logging.level},
@@ -97,6 +98,7 @@ Manifest ParseManifest(const std::string& json) {
     // Legacy packages did not have this field and should retain their windowed behavior.
     manifest.fullscreen = value.value("fullscreen", false);
     manifest.devtools = value.value("devtools", false);
+    manifest.allow_insecure_http = value.value("allow_insecure_http", false);
     manifest.spa_fallback = value.value("spa_fallback", true);
     if (const auto logging = value.find("logging"); logging != value.end()) {
       manifest.logging.enabled = logging->value("enabled", true);

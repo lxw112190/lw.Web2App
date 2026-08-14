@@ -63,6 +63,8 @@ Online URL mode does not snapshot or embed the remote website. Its ZIP is empty 
 6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Local mode combines the private service origin with Manifest `start_path`; when a requested file is absent and SPA fallback is enabled, the server returns `entry`. A traditional multi-page app can use `entry=login.html` with `start_path=/login.html`, while a Vue/React history route can use `entry=index.html` with `start_path=/login`. Legacy packages without `start_path` default to `/`. Window behavior also comes from the Manifest; `F11` toggles fullscreen and `Esc` exits it.
 7. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
 
+The `WebView2` directory is the writable user-data directory required by Microsoft WebView2. It contains cookies, sign-in state, localStorage, IndexedDB, HTTP cache, service workers, and site permissions. It cannot be eliminated while retaining complete browser behavior; placing it under `%LOCALAPPDATA%` also avoids startup failures when the EXE is installed in a read-only location such as `Program Files`. It may be deleted after the app has fully exited to reset web data, but WebView2 creates it again on the next launch.
+
 SHA-256 detects resource corruption or modification; it does not authenticate a publisher. Trusted distribution of the manifest and complete EXE still requires a signing mechanism such as Authenticode.
 
 ## Logging and Diagnostics
@@ -207,7 +209,7 @@ If they are absent, CMake downloads pinned versions. Set `-DLWWEB_DEPS_CACHE=<di
 
 ### Package a local static directory
 
-The GUI and CLI scan `.html`/`.htm` files deterministically and prefer a root `index.html`. `entry` names the real HTML inside the ZIP; `start_path` is the first URL path opened by the WebView:
+The GUI and CLI scan only the first level of the selected directory for `.html`/`.htm`, sort the results deterministically, and prefer `index.html`. Nested business pages are never selected accidentally. `entry` names the real HTML inside the ZIP; `start_path` is the first URL path opened by the WebView:
 
 ```powershell
 lw.Web2App.exe pack .\dist .\MyApp.exe --title "My App"
@@ -257,6 +259,7 @@ Additional options:
 
 - `--entry`: select the real archived HTML, such as `login.html` or `pages/login.html`.
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
+- `--allow-insecure-http`: allow a Windows WebView2 app to contact a legacy plaintext HTTP backend. The GUI label is `HTTP 后台兼容`; it is disabled by default and should only be enabled for trusted intranet systems that cannot yet migrate to HTTPS.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
 - `--no-log`: disable runtime logging in the generated application.

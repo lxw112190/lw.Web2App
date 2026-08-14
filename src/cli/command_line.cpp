@@ -91,6 +91,7 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
   options.manifest.fullscreen = !HasArgument(args, "--windowed");
   options.manifest.spa_fallback = !HasArgument(args, "--no-spa");
   options.manifest.devtools = HasArgument(args, "--devtools");
+  options.manifest.allow_insecure_http = HasArgument(args, "--allow-insecure-http");
   options.manifest.logging.enabled = !HasArgument(args, "--no-log");
   options.manifest.logging.level = HasArgument(args, "--debug-log") ? "debug" : "info";
 
@@ -114,6 +115,7 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "             [--start-path / | /login | /login.html]\n"
        << "             [--width 1280] [--height 800] [--app-id com.example.app]\n"
        << "             [--no-spa] [--windowed] [--no-log | --debug-log] [--devtools]\n"
+       << "             [--allow-insecure-http]\n"
        << "  " << executable << " pack-url <url> <" << application
        << "> [--title App] [--app-id com.example.app] [--windowed]\n"
        << "  " << executable << " inspect <application>\n";

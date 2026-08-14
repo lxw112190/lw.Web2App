@@ -183,6 +183,8 @@ void RunPayloadTests() {
   const auto loaded = lwweb::LoadPayload(pack.output);
   Check(loaded.manifest.title == "Integration Test", "packed manifest loads");
   Check(loaded.manifest.start_path == "/", "packed manifest stores default start path");
+  Check(!loaded.manifest.allow_insecure_http,
+        "insecure HTTP compatibility is disabled by default");
   Check(loaded.manifest.fullscreen, "new packages start fullscreen by default");
   Check(loaded.manifest.logging.enabled, "runtime logging enabled by default");
   Check(loaded.manifest.logging.max_file_size == 2ull * 1024 * 1024,
@@ -252,5 +254,13 @@ void RunPayloadTests() {
   Check(!legacy.fullscreen, "legacy manifest remains windowed");
   Check(!legacy.logging.enabled, "legacy manifest does not unexpectedly enable logging");
   Check(legacy.start_path == "/", "legacy manifest defaults to root start path");
+  Check(!legacy.allow_insecure_http,
+        "legacy manifest retains the secure HTTP-content policy");
+  lwweb::Manifest legacy_http;
+  legacy_http.allow_insecure_http = true;
+  const auto legacy_http_round_trip =
+      lwweb::ParseManifest(lwweb::SerializeManifest(legacy_http));
+  Check(legacy_http_round_trip.allow_insecure_http,
+        "legacy HTTP compatibility survives manifest round trip");
   std::filesystem::remove_all(base, ignored);
 }

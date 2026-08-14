@@ -1,9 +1,10 @@
 #include "lwweb/common/path_utils.h"
 
-#include <stdexcept>
-#include <string>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
+#include <string>
 
 namespace {
 void Check(bool condition, const char* message) {
@@ -55,9 +56,10 @@ void RunPathTests() {
   std::ofstream(root / "index.HTML") << "index";
   std::ofstream(root / "pages" / "admin.htm") << "admin";
   const auto entries = lwweb::FindHtmlEntries(root);
-  Check(entries.size() == 3, "HTML and HTM entries discovered recursively");
+  Check(entries.size() == 2, "only root HTML and HTM entries are discovered");
   Check(entries.front() == "index.HTML", "root index entry is preferred deterministically");
-  Check(entries[1] == "login.html" && entries[2] == "pages/admin.htm",
-        "remaining HTML entries are sorted");
+  Check(entries[1] == "login.html", "remaining root HTML entries are sorted");
+  Check(std::find(entries.begin(), entries.end(), "pages/admin.htm") == entries.end(),
+        "nested HTML entries are not offered as launch pages");
   std::filesystem::remove_all(root, ignored);
 }
