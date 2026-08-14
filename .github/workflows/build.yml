@@ -109,13 +109,20 @@ jobs:
           Compress-Archive -Path dist/lw.Web2App/* `
             -DestinationPath dist/lw.Web2App-windows-x64.zip -Force
 
+      - name: Create portable Visual Studio 2022 source solution
+        shell: pwsh
+        run: |
+          .\tools\create-vs2022-package.ps1 -Force
+
       - name: Upload downloadable artifact
         uses: actions/upload-artifact@v7
         with:
           name: lw.Web2App-windows-x64
           path: |
             dist/lw.Web2App-windows-x64.zip
+            dist/lw.Web2App-vs2022-source.zip
             dist/lw.Web2App/SHA256SUMS.txt
+            dist/SHA256SUMS-vs2022-source.txt
           if-no-files-found: error
           retention-days: 30
 

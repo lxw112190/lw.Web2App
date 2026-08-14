@@ -133,6 +133,7 @@ Artifact 中包含：
 - `third_party/licenses/` 第三方许可证原文
 - `examples/wechat-article-formatter.exe` CI 集成测试生成的示例应用
 - `examples/wechat-article-formatter-LICENSE.txt` 示例项目许可证
+- `lw.Web2App-vs2022-source.zip` 可直接复制、离线编译的完整 VS2022 解决方案
 - `SHA256SUMS.txt`
 
 推送 `v*` 标签时，CI 还会创建 GitHub Release，并附加可直接下载的 ZIP 包和 SHA-256 校验文件。
@@ -166,6 +167,17 @@ build/Release/lw.Web2App.exe
 ```
 
 直接双击运行会打开图形界面。
+
+### 可复制的 VS2022 离线解决方案
+
+已经完成一次 CMake 配置并取得依赖后，可生成一个不含当前电脑绝对路径的完整 VS2022 源码包：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\tools\create-vs2022-package.ps1 -Force
+```
+
+产物为 `dist/lw.Web2App-vs2022-source/` 和同名 ZIP。包内包含 `lw.Web2App.sln`、应用工程、核心静态库工程、测试工程、固定版本的全部 C++ 依赖及一键编译脚本。接收方只需安装 VS2022 的“使用 C++ 的桌面开发”工作负载，解压后直接打开解决方案即可编译，不需要 CMake、Ninja、vcpkg 或联网下载依赖。
 
 Ubuntu 22.04/24.04：
 

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <Keyword>Win32Proj</Keyword>
+    <ProjectGuid>{86F9D54F-D048-46F4-99C5-8EE850C51B8A}</ProjectGuid>
+    <RootNamespace>lwweb_core</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType><UseDebugLibraries>true</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType><UseDebugLibraries>false</UseDebugLibraries><PlatformToolset>v143</PlatformToolset><WholeProgramOptimization>true</WholeProgramOptimization><CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="Shared" />
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"><Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" /></ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release|x64'"><Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" /></ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup><OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir><IntDir>$(SolutionDir)obj\$(ProjectName)\$(Configuration)\</IntDir><TargetName>lwweb_core</TargetName></PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile><WarningLevel>Level4</WarningLevel><ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel><SDLCheck>true</SDLCheck><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;CPPHTTPLIB_USE_NON_BLOCKING_GETADDRINFO;MINIZ_STATIC_DEFINE;SPDLOG_COMPILED_LIB;SPDLOG_WCHAR_FILENAMES;%(PreprocessorDefinitions)</PreprocessorDefinitions><ConformanceMode>true</ConformanceMode><LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling><AdditionalIncludeDirectories>$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><AdditionalOptions>/external:I "$(SolutionDir)deps\nlohmann\include" /external:I "$(SolutionDir)deps\cpp-httplib" /external:I "$(SolutionDir)deps\miniz" /external:I "$(SolutionDir)deps\spdlog\include" /utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile><WarningLevel>Level4</WarningLevel><ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel><FunctionLevelLinking>true</FunctionLevelLinking><IntrinsicFunctions>true</IntrinsicFunctions><SDLCheck>true</SDLCheck><PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;_WIN32_WINNT=0x0A00;CPPHTTPLIB_USE_NON_BLOCKING_GETADDRINFO;MINIZ_STATIC_DEFINE;SPDLOG_COMPILED_LIB;SPDLOG_WCHAR_FILENAMES;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions><ConformanceMode>true</ConformanceMode><LanguageStandard>stdcpp17</LanguageStandard><RuntimeLibrary>MultiThreaded</RuntimeLibrary><ExceptionHandling>Sync</ExceptionHandling><AdditionalIncludeDirectories>$(SolutionDir)include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories><AdditionalOptions>/external:I "$(SolutionDir)deps\nlohmann\include" /external:I "$(SolutionDir)deps\cpp-httplib" /external:I "$(SolutionDir)deps\miniz" /external:I "$(SolutionDir)deps\spdlog\include" /utf-8 %(AdditionalOptions)</AdditionalOptions></ClCompile>
+    <Lib><LinkTimeCodeGeneration>true</LinkTimeCodeGeneration></Lib>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="src\common\file_utils.cpp" /><ClCompile Include="src\common\logging.cpp" /><ClCompile Include="src\common\path_utils.cpp" /><ClCompile Include="src\common\sha256.cpp" />
+    <ClCompile Include="src\packer\manifest.cpp" /><ClCompile Include="src\packer\payload.cpp" /><ClCompile Include="src\packer\packer.cpp" />
+    <ClCompile Include="src\runtime\resource_cache.cpp" /><ClCompile Include="src\runtime\resource_server.cpp" /><ClCompile Include="src\pe\pe_resources.cpp" />
+    <ClCompile Include="deps\miniz\miniz.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>
+    <ClCompile Include="deps\miniz\miniz_zip.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>
+    <ClCompile Include="deps\miniz\miniz_tinfl.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>
+    <ClCompile Include="deps\miniz\miniz_tdef.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>
+    <ClCompile Include="deps\spdlog\src\spdlog.cpp" /><ClCompile Include="deps\spdlog\src\stdout_sinks.cpp" /><ClCompile Include="deps\spdlog\src\color_sinks.cpp" /><ClCompile Include="deps\spdlog\src\file_sinks.cpp" /><ClCompile Include="deps\spdlog\src\async.cpp" /><ClCompile Include="deps\spdlog\src\cfg.cpp" /><ClCompile Include="deps\spdlog\src\bundled_fmtlib_format.cpp" />
+  </ItemGroup>
+  <ItemGroup><ClInclude Include="include\lwweb\**\*.h" /></ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+</Project>

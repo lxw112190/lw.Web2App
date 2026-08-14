@@ -132,6 +132,7 @@ The artifact contains:
 - Original third-party license texts under `third_party/licenses/`
 - `examples/wechat-article-formatter.exe`, the packaged integration-test application
 - `examples/wechat-article-formatter-LICENSE.txt`, its project license
+- `lw.Web2App-vs2022-source.zip`, a portable, offline-buildable VS2022 solution
 - `SHA256SUMS.txt`
 
 Pushing a `v*` tag also creates a GitHub Release containing the ZIP distribution and its SHA-256 checksum file.
@@ -159,6 +160,17 @@ ctest --test-dir build -C Release --output-on-failure
 ```
 
 The output is `build/Release/lw.Web2App.exe`. Launching it without arguments opens the graphical packager.
+
+### Portable Offline VS2022 Solution
+
+After configuring the CMake project once so that its pinned dependencies are available, create a complete VS2022 source package with no paths tied to the current computer:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+  -File .\tools\create-vs2022-package.ps1 -Force
+```
+
+The outputs are `dist/lw.Web2App-vs2022-source/` and the matching ZIP. The package contains `lw.Web2App.sln`, the application, core-library and test projects, all pinned C++ dependencies, and a one-click build script. A recipient only needs Visual Studio 2022 with the **Desktop development with C++** workload; CMake, Ninja, vcpkg, and network dependency downloads are not required.
 
 Ubuntu 22.04/24.04:
 
