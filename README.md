@@ -20,6 +20,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 
 - Windows 使用原生 Win32 + WebView2，Linux 使用 GTK3 + WebKitGTK 4.1，两端均提供 GUI 和 CLI。
 - 图形界面实时显示打包阶段和结果状态，状态区域采用独立重绘，连续更新时保持清晰。
+- Windows 图形界面支持 Per-Monitor V2 高 DPI，控件、字体、边距和绘制区域会随显示器缩放重新布局。
 - 本地 HTML、Vue、React、Vite 静态目录打包为单个 Windows EXE 或 Linux ELF 应用。
 - 在线 `http://`、`https://` 地址打包为单文件桌面应用。
 - Windows 使用 WebView2 Evergreen Runtime；Linux 动态使用系统 WebKitGTK，生成应用不会捆绑完整浏览器内核。
@@ -30,7 +31,8 @@ Linux 图形打包器（Ubuntu 22.04）：
 - 只索引 ZIP 中央目录，请求资源时才解压对应文件，不会启动即展开全部内容。
 - 32 MiB LRU 缓存小型热点资源，大文件不长期驻留内存。
 - 支持 Vue Router、React Router 等 history 模式所需的 SPA fallback。
-- 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 使用稳定的应用专属动态端口，以保持 LocalStorage/IndexedDB origin 跨重启不变。
+- 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
+- Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
 - 拒绝绝对路径、盘符、`..`、NUL、重复 ZIP 路径。
 - 限制资源数量、单文件大小和总解压大小，降低 ZIP 炸弹风险。
@@ -56,7 +58,7 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 1. 程序从自身末尾读取 `LWWEB002` Footer；没有 Footer 时显示当前平台的打包器界面，有 Footer 时进入生成应用模式，同时仍可读取旧版 `LWWEB001`。
 2. Runner 检查所有偏移和长度是否位于当前 PE/ELF 文件内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。校验失败时拒绝打开嵌入内容。
 3. 本地模式只读取 ZIP 中央目录建立索引，不会把网站完整解压到磁盘或一次性载入内存。
-4. Runner 在 `127.0.0.1` 的应用专属稳定动态端口启动 HTTP 服务，严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback。稳定端口让 LocalStorage/IndexedDB 在重启后继续使用同一 origin；同一应用当前只允许一个运行实例。
+4. Runner 先通过 Windows Named Mutex 或 Linux `flock` 获取 `app_id` 专属单实例锁，再在 `127.0.0.1` 的稳定首选端口启动 HTTP 服务。服务严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback；首选端口被无关进程占用时会尝试确定性的备用端口并写入日志。
 5. 小型热点资源进入 32 MiB LRU 缓存；大文件按请求读取，不长期占用内存。
 6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。两端都导航到本地应用专属地址或在线 URL，窗口标题、尺寸、是否可调整、默认全屏和开发者工具策略来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
 7. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
@@ -223,6 +225,7 @@ lw.Web2App.exe pack .\dist .\MyApp.exe --title "我的应用"
 lw.Web2App.exe pack .\dist .\MyApp.exe `
   --entry index.html `
   --title "我的应用" `
+  --app-id com.example.myapp `
   --width 1280 `
   --height 800 `
   --windowed `
@@ -262,6 +265,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--no-log`：关闭生成应用的运行日志。
 - `--debug-log`：将运行日志级别设为 DEBUG，记录资源请求、ZIP 缓存和 SPA fallback。
 - `--devtools`：允许打开开发者工具和默认右键菜单。
+- `--app-id`：显式指定跨重启稳定的应用 ID；Windows 和 Linux 使用同一参数解析规则。
 - `--company`：写入公司名称。
 - `--version`：写入文件和产品版本。
 - `--copyright`：写入版权信息。
@@ -301,8 +305,9 @@ Footer             固定 80 字节
 ## 项目结构
 
 ```text
-src/app/       Windows Win32 GUI、CLI 和程序入口
-src/linux/     Linux GTK3 GUI、CLI 和 WebKitGTK Runtime
+src/cli/       Windows/Linux 共用 UTF-8 CLI 解析与 PackOptions 构建
+src/app/       Windows Win32 GUI、Runtime 和程序入口
+src/linux/     Linux GTK3 GUI、WebKitGTK Runtime 和程序入口
 src/webview/   WebView2 宿主
 src/packer/    Manifest、Payload 和打包器
 src/runtime/   ZIP 资源读取、LRU 和本地 HTTP 服务
@@ -351,7 +356,7 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 
 - 多分辨率图标生成
 - Authenticode 代码签名
-- 单实例、托盘和窗口置顶
+- 托盘、第二次启动时前置已有窗口和窗口置顶
 - 文件下载与外部链接策略
 - JS 与 C++ 双向 IPC
 - 自定义 User-Agent、启动参数和 CSP

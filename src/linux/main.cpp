@@ -1,3 +1,4 @@
+#include "lwweb/cli/command_line.h"
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
@@ -5,11 +6,12 @@
 #include "lwweb/packer/packer.h"
 #include "lwweb/packer/payload.h"
 #include "lwweb/runtime/resource_server.h"
+#include "lwweb/runtime/single_instance.h"
+#include "lwweb/version.h"
 
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
 
-#include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -20,20 +22,6 @@
 
 namespace lwweb {
 namespace {
-
-constexpr const char* kVersion = "0.1.0";
-
-std::string ArgumentValue(const std::vector<std::string>& args, const std::string& name,
-                          const std::string& fallback = {}) {
-  for (std::size_t i = 0; i + 1 < args.size(); ++i) {
-    if (args[i] == name) return args[i + 1];
-  }
-  return fallback;
-}
-
-bool HasArgument(const std::vector<std::string>& args, const std::string& name) {
-  return std::find(args.begin(), args.end(), name) != args.end();
-}
 
 std::filesystem::path XdgPath(const char* variable, const char* fallback) {
   if (const auto* value = std::getenv(variable); value && *value) return value;
@@ -93,55 +81,6 @@ void ConfigureEnvironmentProxy(WebKitWebsiteDataManager* manager, Logger& logger
 std::string DefaultOutputPath() {
   const auto* home = std::getenv("HOME");
   return (std::filesystem::path(home && *home ? home : ".") / "MyWebApp").string();
-}
-
-int RunCli(const std::vector<std::string>& args) {
-  if (args.size() < 2 || args[1] == "help" || args[1] == "--help") {
-    std::cout
-        << "lw.Web2App " << kVersion << " (Linux)\n\n"
-        << "  lw.Web2App pack <directory> <output> [--entry index.html] [--title App]\n"
-        << "             [--width 1280] [--height 800] [--no-spa] [--windowed]\n"
-        << "             [--no-log | --debug-log] [--devtools]\n"
-        << "  lw.Web2App pack-url <url> <output> [--title App] [--windowed]\n"
-        << "  lw.Web2App inspect <application>\n";
-    return 0;
-  }
-  if (args[1] == "inspect" && args.size() >= 3) {
-    std::cout << SerializeManifest(LoadPayload(args[2]).manifest, true) << '\n';
-    return 0;
-  }
-  if ((args[1] == "pack" || args[1] == "pack-url") && args.size() >= 4) {
-    PackOptions options;
-    options.runner = CurrentExecutablePath();
-    options.output = args[3];
-    options.manifest.mode = args[1] == "pack" ? AppMode::Local : AppMode::Url;
-    if (options.manifest.mode == AppMode::Local) {
-      options.source_directory = args[2];
-      auto entry = ArgumentValue(args, "--entry");
-      if (entry.empty()) {
-        entry = std::filesystem::relative(FindDefaultEntry(options.source_directory),
-                                          options.source_directory)
-                    .generic_string();
-      }
-      options.manifest.entry = entry;
-    } else {
-      options.manifest.url = args[2];
-    }
-    options.manifest.title = ArgumentValue(args, "--title", "lw.Web2App App");
-    options.manifest.width = std::stoul(ArgumentValue(args, "--width", "1280"));
-    options.manifest.height = std::stoul(ArgumentValue(args, "--height", "800"));
-    options.manifest.app_id = ArgumentValue(args, "--app-id");
-    options.manifest.fullscreen = !HasArgument(args, "--windowed");
-    options.manifest.spa_fallback = !HasArgument(args, "--no-spa");
-    options.manifest.devtools = HasArgument(args, "--devtools");
-    options.manifest.logging.enabled = !HasArgument(args, "--no-log");
-    options.manifest.logging.level = HasArgument(args, "--debug-log") ? "debug" : "info";
-    options.progress = [](const std::string& message) { std::cout << message << '\n'; };
-    PackApplication(options);
-    std::cout << "Created Linux application: " << options.output << '\n';
-    return 0;
-  }
-  throw Error("Unknown or incomplete command; run with --help");
 }
 
 // GTK/WebKitGTK 信号回调共享的轻量运行状态；对象生命周期覆盖整个 gtk_main 循环。
@@ -228,7 +167,8 @@ int RunPayloadApp(const LoadedPayload& payload) {
   const auto app_id = EffectiveAppId(payload.manifest);
   logger.Info("App ID: " + app_id);
   logger.Info("Entry: " + (payload.manifest.mode == AppMode::Local ? payload.manifest.entry
-                                                                   : payload.manifest.url));
+                                                                    : payload.manifest.url));
+  SingleInstanceGuard instance_guard(app_id);
 
   std::unique_ptr<ResourceServer> server;
   std::string navigation;
@@ -542,7 +482,9 @@ void ShowLauncherError(const std::string& message) {
 int main(int argc, char** argv) {
   try {
     std::vector<std::string> args(argv, argv + argc);
-    if (argc > 1) return lwweb::RunCli(args);
+    if (argc > 1)
+      return lwweb::RunCommandLine(args, lwweb::CurrentExecutablePath(),
+                                   lwweb::CliPlatform::Linux, std::cout);
     const auto executable = lwweb::CurrentExecutablePath();
     if (lwweb::HasPayload(executable)) return lwweb::RunPayloadApp(lwweb::LoadPayload(executable));
     return lwweb::RunPackerGui();

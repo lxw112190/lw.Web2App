@@ -4,16 +4,68 @@
 #include "lwweb/common/logging.h"
 #include "lwweb/runtime/resource_server.h"
 
+#include <httplib.h>
+
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace {
 void Check(bool condition, const char* message) {
   if (!condition) throw std::runtime_error(message);
 }
+
+struct TempDirectoryGuard {
+  std::filesystem::path path;
+  ~TempDirectoryGuard() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path, ignored);
+  }
+};
+
+bool BoundsRejected(const lwweb::PayloadFooter& footer, std::uint64_t file_size) {
+  try {
+    lwweb::ValidatePayloadBounds(footer, file_size);
+    return false;
+  } catch (...) {
+    return true;
+  }
+}
+
+struct ListeningServerGuard {
+  std::unique_ptr<httplib::Server> server;
+  std::thread thread;
+
+  bool Start(std::uint16_t port) {
+    server = std::make_unique<httplib::Server>();
+#ifdef _WIN32
+    server->set_socket_options([](auto socket) {
+      const BOOL exclusive = TRUE;
+      (void)setsockopt(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                       reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
+    });
+#else
+    server->set_socket_options([](auto) {});
+#endif
+    if (!server->bind_to_port("127.0.0.1", port)) {
+      server.reset();
+      return false;
+    }
+    thread = std::thread([this] { server->listen_after_bind(); });
+    server->wait_until_ready();
+    return true;
+  }
+
+  ~ListeningServerGuard() {
+    if (server) server->stop();
+    if (thread.joinable()) thread.join();
+  }
+};
 }
 
 void RunPayloadTests() {
@@ -21,6 +73,7 @@ void RunPayloadTests() {
       std::chrono::steady_clock::now().time_since_epoch().count());
   const auto log_file = std::filesystem::temp_directory_path() /
                         ("lwweb-logging-test-" + unique) / "app.log";
+  TempDirectoryGuard log_cleanup{log_file.parent_path()};
   lwweb::LoggingConfig rotation;
   rotation.max_file_size = 64 * 1024;
   rotation.max_files = 2;
@@ -59,6 +112,40 @@ void RunPayloadTests() {
   Check(output.manifest_size == input.manifest_size, "manifest size round-trip");
   Check(output.sha256 == input.sha256, "digest round-trip");
 
+  lwweb::PayloadFooter valid_bounds;
+  valid_bounds.payload_offset = 100;
+  valid_bounds.payload_size = 200;
+  valid_bounds.manifest_offset = 300;
+  valid_bounds.manifest_size = 50;
+  lwweb::ValidatePayloadBounds(valid_bounds, 350 + lwweb::kPayloadFooterSize);
+  Check(BoundsRejected(valid_bounds, lwweb::kPayloadFooterSize - 1),
+        "file smaller than footer rejected");
+  auto invalid_bounds = valid_bounds;
+  invalid_bounds.version = 99;
+  Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
+        "unsupported footer version rejected");
+  invalid_bounds = valid_bounds;
+  invalid_bounds.payload_offset = std::numeric_limits<std::uint64_t>::max();
+  Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
+        "payload offset overflow rejected");
+  invalid_bounds = valid_bounds;
+  invalid_bounds.payload_size = std::numeric_limits<std::uint64_t>::max();
+  Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
+        "payload size overflow rejected");
+  invalid_bounds = valid_bounds;
+  invalid_bounds.manifest_offset = 301;
+  Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
+        "manifest gap rejected");
+  invalid_bounds = valid_bounds;
+  invalid_bounds.manifest_size = 49;
+  Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
+        "manifest not adjacent to footer rejected");
+  invalid_bounds = valid_bounds;
+  invalid_bounds.payload_size = 251;
+  invalid_bounds.manifest_offset = 351;
+  Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
+        "payload beyond footer rejected");
+
   const auto base = std::filesystem::temp_directory_path() / "lwweb-integration-test";
   std::error_code ignored;
   std::filesystem::remove_all(base, ignored);
@@ -76,6 +163,16 @@ void RunPayloadTests() {
   pack.source_directory = base / "site";
   pack.output = base / "packed.exe";
   pack.manifest.title = "Integration Test";
+  std::unique_ptr<ListeningServerGuard> port_blocker;
+  for (int attempt = 0; attempt < 32 && !port_blocker; ++attempt) {
+    const auto app_id = "test-port-" + unique + "-" + std::to_string(attempt);
+    auto candidate = std::make_unique<ListeningServerGuard>();
+    if (candidate->Start(lwweb::StableAppPort(app_id))) {
+      pack.manifest.app_id = app_id;
+      port_blocker = std::move(candidate);
+    }
+  }
+  Check(port_blocker != nullptr, "test reserves a preferred resource port");
   {
     std::ofstream previous(pack.output, std::ios::binary);
     previous << "previous application";
@@ -95,6 +192,13 @@ void RunPayloadTests() {
         "stable app port is deterministic");
   Check(stable_port != lwweb::StableAppPort("app-a-different-id"),
         "different app IDs distribute across ports");
+  {
+    lwweb::ResourceServer fallback_server(loaded);
+    const auto address = fallback_server.Start();
+    Check(address != "http://127.0.0.1:" + std::to_string(stable_port) + "/",
+          "occupied preferred port selects a fallback port");
+    fallback_server.Stop();
+  }
   lwweb::ZipResourceStore store(loaded);
   Check(store.Exists("index.html"), "ZIP index includes entry");
   Check(store.Exists("assets/app.css"), "ZIP index includes asset");

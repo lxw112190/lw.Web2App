@@ -43,7 +43,10 @@ std::array<std::uint8_t, kPayloadFooterSize> ReadFooterBytes(
   return bytes;
 }
 
-void ValidateBounds(const PayloadFooter& footer, std::uint64_t file_size) {
+}  // namespace
+
+void ValidatePayloadBounds(const PayloadFooter& footer, std::uint64_t file_size) {
+  if (file_size < kPayloadFooterSize) throw Error("Executable is smaller than the payload footer");
   if (footer.version != kPayloadVersionV1 && footer.version != kPayloadVersion)
     throw Error("Unsupported payload version");
   const std::uint64_t footer_offset = file_size - kPayloadFooterSize;
@@ -57,8 +60,6 @@ void ValidateBounds(const PayloadFooter& footer, std::uint64_t file_size) {
     throw Error("Manifest range is invalid");
   if (footer.manifest_size > 1024 * 1024) throw Error("Manifest exceeds the 1 MiB limit");
 }
-
-}  // namespace
 
 std::array<std::uint8_t, kPayloadFooterSize> EncodeFooter(const PayloadFooter& footer) {
   std::array<std::uint8_t, kPayloadFooterSize> bytes{};
@@ -108,7 +109,7 @@ bool HasPayload(const std::filesystem::path& executable) {
 LoadedPayload LoadPayload(const std::filesystem::path& executable, bool verify_hash) {
   const auto file_size = FileSize(executable);
   const auto footer = DecodeFooter(ReadFooterBytes(executable));
-  ValidateBounds(footer, file_size);
+  ValidatePayloadBounds(footer, file_size);
   if (verify_hash) {
     const auto hashed_size = footer.version == kPayloadVersionV1
                                  ? footer.payload_size

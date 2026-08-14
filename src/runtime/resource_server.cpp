@@ -24,6 +24,10 @@ std::uint16_t StableAppPort(const std::string& app_id) {
   return static_cast<std::uint16_t>(49152u + (hash & 0x3fffu));
 }
 
+bool IsExpectedResourceHost(const std::string& host, std::uint16_t port) {
+  return host == "127.0.0.1:" + std::to_string(port);
+}
+
 // ZipResourceStore 的私有实现，负责 miniz 回调、宽路径文件流、索引和缓存。
 struct ZipResourceStore::Impl {
   LoadedPayload payload;
@@ -124,57 +128,84 @@ ResourceServer::~ResourceServer() { Stop(); }
 std::string ResourceServer::Start() {
   if (thread_.joinable()) return "http://127.0.0.1:" + std::to_string(port_) + "/";
   store_ = std::make_unique<ZipResourceStore>(payload_, limits_, logger_);
-  server_ = std::make_unique<httplib::Server>();
-  server_->set_payload_max_length(1024);
-  server_->Get("/health", [](const httplib::Request&, httplib::Response& response) {
-    response.set_content("ok", "text/plain; charset=utf-8");
-    response.set_header("Cache-Control", "no-store");
-  });
-  server_->Get("/.*", [this](const httplib::Request& request, httplib::Response& response) {
-    if (logger_ && logger_->DebugEnabled()) logger_->Debug("GET " + request.path);
-    const auto expected = "127.0.0.1:" + std::to_string(port_);
-    const auto host = request.get_header_value("Host");
-    if (host != expected) {
-      response.status = 403;
-      return;
-    }
-    std::string path = request.path;
-    if (!path.empty() && path.front() == '/') path.erase(path.begin());
-    if (path.empty()) path = payload_.manifest.entry;
-    auto normalized = NormalizeArchivePath(path);
-    if (!normalized) {
-      response.status = 400;
-      return;
-    }
-    if (!store_->Exists(*normalized)) {
-      if (!payload_.manifest.spa_fallback) {
-        response.status = 404;
+  const auto make_server = [this] {
+    auto server = std::make_unique<httplib::Server>();
+#ifdef _WIN32
+    // Windows 的 SO_REUSEADDR 允许第二个进程绑定同一端口，会破坏 Host/origin
+    // 隔离。独占绑定让端口冲突可靠失败，再由候选端口逻辑处理回退。
+    server->set_socket_options([](auto socket) {
+      const BOOL exclusive = TRUE;
+      (void)setsockopt(socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                       reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
+    });
+#else
+    // 本地应用端口不需要 SO_REUSEPORT；保持独占可可靠检测其他进程占用。
+    server->set_socket_options([](auto) {});
+#endif
+    server->set_payload_max_length(1024);
+    server->Get("/health", [](const httplib::Request&, httplib::Response& response) {
+      response.set_content("ok", "text/plain; charset=utf-8");
+      response.set_header("Cache-Control", "no-store");
+    });
+    server->Get("/.*", [this](const httplib::Request& request, httplib::Response& response) {
+      if (logger_ && logger_->DebugEnabled()) logger_->Debug("GET " + request.path);
+      const auto host = request.get_header_value("Host");
+      if (!IsExpectedResourceHost(host, static_cast<std::uint16_t>(port_))) {
+        response.status = 403;
         return;
       }
-      normalized = NormalizeArchivePath(payload_.manifest.entry);
-      if (logger_ && logger_->DebugEnabled())
-        logger_->Debug("SPA fallback: " + request.path);
-    }
-    try {
-      auto bytes = store_->Read(*normalized);
-      response.set_content(reinterpret_cast<const char*>(bytes.data()), bytes.size(),
-                           MimeTypeForPath(*normalized));
-      response.set_header("X-Content-Type-Options", "nosniff");
-      response.set_header("Referrer-Policy", "no-referrer");
-      response.set_header("Cross-Origin-Resource-Policy", "same-origin");
-      response.set_header("Content-Security-Policy",
-                          "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' "
-                          "'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: "
-                          "blob:; media-src 'self' data: blob:; connect-src 'self' https: wss:");
-    } catch (...) {
-      response.status = 500;
-    }
-  });
-  port_ = StableAppPort(EffectiveAppId(payload_.manifest));
-  if (!server_->bind_to_port("127.0.0.1", port_))
-    throw Error("Cannot bind the stable local resource server port " +
-                std::to_string(port_) + "; another instance may already be running");
+      std::string path = request.path;
+      if (!path.empty() && path.front() == '/') path.erase(path.begin());
+      if (path.empty()) path = payload_.manifest.entry;
+      auto normalized = NormalizeArchivePath(path);
+      if (!normalized) {
+        response.status = 400;
+        return;
+      }
+      if (!store_->Exists(*normalized)) {
+        if (!payload_.manifest.spa_fallback) {
+          response.status = 404;
+          return;
+        }
+        normalized = NormalizeArchivePath(payload_.manifest.entry);
+        if (logger_ && logger_->DebugEnabled())
+          logger_->Debug("SPA fallback: " + request.path);
+      }
+      try {
+        auto bytes = store_->Read(*normalized);
+        response.set_content(reinterpret_cast<const char*>(bytes.data()), bytes.size(),
+                             MimeTypeForPath(*normalized));
+        response.set_header("X-Content-Type-Options", "nosniff");
+        response.set_header("Referrer-Policy", "no-referrer");
+        response.set_header("Cross-Origin-Resource-Policy", "same-origin");
+        response.set_header("Content-Security-Policy",
+                            "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' "
+                            "'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: "
+                            "blob:; media-src 'self' data: blob:; connect-src 'self' https: wss:");
+      } catch (...) {
+        response.status = 500;
+      }
+    });
+    return server;
+  };
+  const auto preferred_port = StableAppPort(EffectiveAppId(payload_.manifest));
+  constexpr int kPortAttempts = 64;
+  for (int attempt = 0; attempt < kPortAttempts; ++attempt) {
+    // 257 与 16384 互质，可在动态端口范围内形成稳定且不重复的候选序列。
+    port_ = 49152 + ((preferred_port - 49152 + attempt * 257) & 0x3fff);
+    server_ = make_server();
+    if (server_->bind_to_port("127.0.0.1", port_)) break;
+    server_.reset();
+    port_ = 0;
+  }
+  if (!port_)
+    throw Error("Cannot bind a local resource server port after " +
+                std::to_string(kPortAttempts) + " attempts");
+  if (logger_ && port_ != preferred_port)
+    logger_->Warn("Preferred resource port " + std::to_string(preferred_port) +
+                  " was occupied; using " + std::to_string(port_));
   thread_ = std::thread([this] { server_->listen_after_bind(); });
+  server_->wait_until_ready();
   if (logger_) logger_->Info("Resource server: 127.0.0.1:" + std::to_string(port_));
   return "http://127.0.0.1:" + std::to_string(port_) + "/";
 }

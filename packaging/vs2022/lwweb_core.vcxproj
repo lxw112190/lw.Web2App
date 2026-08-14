@@ -33,9 +33,10 @@
     <Lib><LinkTimeCodeGeneration>true</LinkTimeCodeGeneration></Lib>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="src\cli\command_line.cpp" />
     <ClCompile Include="src\common\file_utils.cpp" /><ClCompile Include="src\common\logging.cpp" /><ClCompile Include="src\common\path_utils.cpp" /><ClCompile Include="src\common\sha256.cpp" />
     <ClCompile Include="src\packer\manifest.cpp" /><ClCompile Include="src\packer\payload.cpp" /><ClCompile Include="src\packer\packer.cpp" />
-    <ClCompile Include="src\runtime\resource_cache.cpp" /><ClCompile Include="src\runtime\resource_server.cpp" /><ClCompile Include="src\pe\pe_resources.cpp" />
+    <ClCompile Include="src\runtime\resource_cache.cpp" /><ClCompile Include="src\runtime\resource_server.cpp" /><ClCompile Include="src\runtime\single_instance.cpp" /><ClCompile Include="src\pe\pe_resources.cpp" />
     <ClCompile Include="deps\miniz\miniz.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>
     <ClCompile Include="deps\miniz\miniz_zip.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>
     <ClCompile Include="deps\miniz\miniz_tinfl.c"><CompileAs>CompileAsC</CompileAs><ExceptionHandling>false</ExceptionHandling><WarningLevel>TurnOffAllWarnings</WarningLevel></ClCompile>

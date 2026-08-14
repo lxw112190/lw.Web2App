@@ -44,6 +44,8 @@ struct LoadedPayload {
 
 std::array<std::uint8_t, kPayloadFooterSize> EncodeFooter(const PayloadFooter& footer);
 PayloadFooter DecodeFooter(const std::array<std::uint8_t, kPayloadFooterSize>& bytes);
+// 纯边界校验函数，供加载器、表驱动测试和 fuzz target 共同使用。
+void ValidatePayloadBounds(const PayloadFooter& footer, std::uint64_t file_size);
 bool HasPayload(const std::filesystem::path& executable);
 LoadedPayload LoadPayload(const std::filesystem::path& executable,
                           bool verify_hash = true);

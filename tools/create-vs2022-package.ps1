@@ -56,6 +56,30 @@ foreach ($file in @('README.md', 'README_EN.md', 'LICENSE', 'THIRD_PARTY_NOTICES
 }
 Copy-Item -Path (Join-Path $templateRoot '*') -Destination $target -Force
 
+$cmakeText = Get-Content -LiteralPath (Join-Path $repoRoot 'CMakeLists.txt') -Raw
+if ($cmakeText -notmatch 'project\(lw\.Web2App VERSION ([0-9]+)\.([0-9]+)\.([0-9]+)') {
+  throw 'Cannot read the project version from CMakeLists.txt'
+}
+$projectVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+$replacements = @{
+  '@PROJECT_VERSION@' = $projectVersion
+  '@PROJECT_VERSION_MAJOR@' = $Matches[1]
+  '@PROJECT_VERSION_MINOR@' = $Matches[2]
+  '@PROJECT_VERSION_PATCH@' = $Matches[3]
+}
+function Expand-VersionTemplate([string]$source, [string]$destination) {
+  $text = Get-Content -LiteralPath $source -Raw
+  foreach ($item in $replacements.GetEnumerator()) {
+    $text = $text.Replace($item.Key, $item.Value)
+  }
+  New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+  [IO.File]::WriteAllText($destination, $text, [Text.UTF8Encoding]::new($false))
+}
+Expand-VersionTemplate (Join-Path $repoRoot 'resources\version.h.in') `
+  (Join-Path $target 'include\lwweb\version.h')
+Expand-VersionTemplate (Join-Path $repoRoot 'resources\lwweb.rc.in') `
+  (Join-Path $target 'resources\lwweb.rc')
+
 $depsTarget = Join-Path $target 'deps'
 Copy-Tree (Join-Path $depsRoot 'nlohmann_json-src\include') (Join-Path $depsTarget 'nlohmann\include')
 New-Item -ItemType Directory -Path (Join-Path $depsTarget 'nlohmann') -Force | Out-Null

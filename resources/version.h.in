@@ -1,0 +1,7 @@
+#pragma once
+
+namespace lwweb {
+
+inline constexpr char kVersion[] = "@PROJECT_VERSION@";
+
+}  // namespace lwweb

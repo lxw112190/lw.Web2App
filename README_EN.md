@@ -20,6 +20,7 @@ Linux graphical packager (Ubuntu 22.04):
 
 - Native Win32 + WebView2 on Windows and GTK3 + WebKitGTK 4.1 on Linux, with GUI and CLI on both.
 - Live packaging-stage and result status in the GUI, with an independently repainted status area for clear rapid updates.
+- Per-Monitor V2 high-DPI layout on Windows; controls, fonts, spacing, and painted regions are rescaled when the monitor DPI changes.
 - Package a local HTML, Vue, React, or Vite build into one Windows EXE or Linux ELF application.
 - Package an online `http://` or `https://` URL into a single-file desktop application.
 - WebView2 Evergreen Runtime with the WebView2 Loader statically linked.
@@ -30,7 +31,8 @@ Linux graphical packager (Ubuntu 22.04):
 - ZIP central-directory indexing and per-request decompression instead of eager extraction.
 - A 32 MiB LRU cache for small hot resources; large files do not remain in memory.
 - SPA fallback for history-mode Vue Router and React Router applications.
-- The local HTTP service binds only to `127.0.0.1` and uses a stable per-`app_id` dynamic port so the LocalStorage/IndexedDB origin survives restarts.
+- The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
+- True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
 - Limits for entry count, individual file size, and total uncompressed size.
 - PNG/ICO application icons and complete Windows PE version metadata.
@@ -55,7 +57,7 @@ Online URL mode does not snapshot or embed the remote website. Its ZIP is empty 
 1. The executable reads the `LWWEB002` footer from its own end. Without a footer it opens the packager; with a footer it enters generated-application mode. Legacy `LWWEB001` packages remain readable.
 2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP plus manifest. It refuses to open embedded content when validation fails.
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
-4. A private HTTP service starts on a stable per-app dynamic port at `127.0.0.1`. It validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback when configured. The stable port preserves the LocalStorage/IndexedDB origin across restarts; only one instance of the same app can currently run at a time.
+4. The Runner first acquires an `app_id`-specific single-instance lock through a Windows named mutex or Linux `flock`, then starts the private HTTP service on its stable preferred `127.0.0.1` port. The service validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback. If an unrelated process occupies the preferred port, deterministic alternatives are tried and logged.
 5. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
 6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Both navigate to the private local address or online URL and honor title, dimensions, resizing, fullscreen, and developer-tool settings. `F11` toggles fullscreen and `Esc` exits it.
 7. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
@@ -216,6 +218,7 @@ Full example:
 lw.Web2App.exe pack .\dist .\MyApp.exe `
   --entry index.html `
   --title "My App" `
+  --app-id com.example.myapp `
   --width 1280 `
   --height 800 `
   --windowed `
@@ -255,6 +258,7 @@ Additional options:
 - `--no-log`: disable runtime logging in the generated application.
 - `--debug-log`: enable DEBUG runtime logs for resource requests, ZIP cache activity, and SPA fallback.
 - `--devtools`: enable developer tools and the default context menu.
+- `--app-id`: explicitly set the stable application ID; Windows and Linux share the same parser.
 - `--company`: write the company name.
 - `--version`: write file and product versions.
 - `--copyright`: write copyright metadata.
@@ -294,8 +298,9 @@ This project packages trusted static web applications. It is not a sandbox for h
 ## Project Layout
 
 ```text
-src/app/       Windows Win32 GUI, CLI, and entry point
-src/linux/     Linux GTK3 GUI, CLI, and WebKitGTK Runtime
+src/cli/       Shared UTF-8 CLI parsing and PackOptions construction
+src/app/       Windows Win32 GUI, Runtime, and entry point
+src/linux/     Linux GTK3 GUI, WebKitGTK Runtime, and entry point
 src/webview/   WebView2 host
 src/packer/    Manifest, payload, and packer
 src/runtime/   ZIP resource access, LRU cache, and local HTTP server
@@ -344,7 +349,7 @@ Other planned improvements:
 
 - Multi-resolution icon generation
 - Authenticode code signing
-- Single-instance mode, tray support, and always-on-top windows
+- Tray support, activating the existing window on a second launch, and always-on-top windows
 - File download and external-link policies
 - JavaScript/C++ IPC
 - Custom user agents, startup arguments, and CSP

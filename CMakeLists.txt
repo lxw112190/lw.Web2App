@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.22)
 
 project(lw.Web2App VERSION 0.1.0 LANGUAGES C CXX)
 
+configure_file(resources/version.h.in generated/lwweb/version.h @ONLY)
+if(WIN32)
+  configure_file(resources/lwweb.rc.in generated/lwweb.rc @ONLY)
+endif()
+
 if(POLICY CMP0135)
   cmake_policy(SET CMP0135 NEW)
 endif()
@@ -97,6 +102,7 @@ if(WIN32)
 endif()
 
 add_library(lwweb_core STATIC
+  src/cli/command_line.cpp
   src/common/file_utils.cpp
   src/common/logging.cpp
   src/common/path_utils.cpp
@@ -105,8 +111,9 @@ add_library(lwweb_core STATIC
   src/packer/payload.cpp
   src/packer/packer.cpp
   src/runtime/resource_cache.cpp
+  src/runtime/single_instance.cpp
   src/runtime/resource_server.cpp)
-target_include_directories(lwweb_core PUBLIC include)
+target_include_directories(lwweb_core PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(lwweb_core SYSTEM PRIVATE ${miniz_SOURCE_DIR})
 target_link_libraries(lwweb_core PUBLIC
   nlohmann_json::nlohmann_json
@@ -120,7 +127,8 @@ if(WIN32)
   target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
     SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)
   add_executable(lwweb WIN32
-    src/app/main.cpp src/app/main_window.cpp src/webview/webview_host.cpp resources/lwweb.rc)
+    src/app/main.cpp src/app/main_window.cpp src/webview/webview_host.cpp
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/lwweb.rc")
   target_include_directories(lwweb PRIVATE include ${WEBVIEW2_INCLUDE})
   target_link_libraries(lwweb PRIVATE lwweb_core "${WEBVIEW2_LOADER}" comctl32 comdlg32
     dwmapi ole32 shell32 shlwapi uxtheme windowscodecs user32 gdi32)
@@ -179,9 +187,11 @@ endif()
 include(CTest)
 if(BUILD_TESTING)
   add_executable(lwweb_tests
+    tests/cli_tests.cpp
     tests/test_main.cpp
     tests/payload_tests.cpp
-    tests/path_tests.cpp)
+    tests/path_tests.cpp
+    tests/resource_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)
   target_link_libraries(lwweb_tests PRIVATE lwweb_core)
   if(MSVC)

@@ -2,8 +2,8 @@
 #pragma code_page(65001)
 
 1 VERSIONINFO
- FILEVERSION 0,1,0,0
- PRODUCTVERSION 0,1,0,0
+ FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+ PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
  FILEFLAGSMASK 0x3fL
  FILEOS 0x40004L
  FILETYPE 0x1L
@@ -14,13 +14,13 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "天天代码码天天\0"
       VALUE "FileDescription", "轻量级网页桌面应用打包工具（Windows）\0"
-      VALUE "FileVersion", "0.1.0.0\0"
+      VALUE "FileVersion", "@PROJECT_VERSION@.0\0"
       VALUE "InternalName", "lw.Web2App\0"
       VALUE "LegalCopyright", "Copyright © 2026 天天代码码天天\0"
       VALUE "Comments", "作者：天天代码码天天 | QQ：819069052 | QQ群：758616458（C# 人工智能实践）\0"
       VALUE "OriginalFilename", "lw.Web2App.exe\0"
       VALUE "ProductName", "lw.Web2App\0"
-      VALUE "ProductVersion", "0.1.0.0\0"
+      VALUE "ProductVersion", "@PROJECT_VERSION@.0\0"
     END
   END
   BLOCK "VarFileInfo"

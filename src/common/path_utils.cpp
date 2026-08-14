@@ -12,6 +12,7 @@
 namespace lwweb {
 
 std::optional<std::string> NormalizeArchivePath(std::string path) {
+  if (path.size() > 4096) return std::nullopt;
   std::replace(path.begin(), path.end(), '\\', '/');
   while (!path.empty() && path.front() == '/') path.erase(path.begin());
   if (path.empty() || path.find('\0') != std::string::npos ||
@@ -77,4 +78,3 @@ bool IsSupportedHttpUrl(const std::string& url) {
 }
 
 }  // namespace lwweb
-

@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace lwweb {
 namespace {
@@ -50,24 +51,61 @@ enum ControlId {
   kModeHint,
 };
 
-// 打包器主窗口持有的字体、画刷和交互状态。
+enum class FontRole { Title, Section, Body, Small };
+
+struct ControlLayout {
+  HWND control = nullptr;
+  RECT logical{};
+  FontRole font = FontRole::Body;
+};
+
+// 打包器主窗口持有的字体、画刷、DPI 布局和交互状态。
 // 所有 GDI 对象都在 WM_DESTROY 中统一释放，避免窗口重复打开时泄漏。
 struct State {
   HWND window = nullptr;
+  UINT dpi = 96;
   HFONT title_font = nullptr;
   HFONT section_font = nullptr;
   HFONT body_font = nullptr;
   HFONT small_font = nullptr;
   HBRUSH background_brush = nullptr;
   HBRUSH card_brush = nullptr;
+  std::vector<ControlLayout> controls;
   std::wstring status = L"准备就绪 · 请选择网页目录和输出位置";
   bool busy = false;
 };
 
 constexpr RECT kStatusRect{48, 731, 712, 757};
 
-HFONT MakeFont(int height, int weight) {
-  return CreateFontW(-height, 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), 96); }
+
+RECT ScaleRect(RECT value, UINT dpi) {
+  return {Scale(value.left, dpi), Scale(value.top, dpi), Scale(value.right, dpi),
+          Scale(value.bottom, dpi)};
+}
+
+HFONT FontForRole(const State& state, FontRole role) {
+  switch (role) {
+    case FontRole::Title:
+      return state.title_font;
+    case FontRole::Section:
+      return state.section_font;
+    case FontRole::Small:
+      return state.small_font;
+    default:
+      return state.body_font;
+  }
+}
+
+FontRole RoleForFont(const State& state, HFONT font) {
+  if (font == state.title_font) return FontRole::Title;
+  if (font == state.section_font) return FontRole::Section;
+  if (font == state.small_font) return FontRole::Small;
+  return FontRole::Body;
+}
+
+HFONT MakeFont(int height, int weight, UINT dpi) {
+  return CreateFontW(-Scale(height, dpi), 0, 0, 0, weight, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                      OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                      DEFAULT_PITCH | FF_DONTCARE, L"Microsoft YaHei UI");
 }
@@ -76,13 +114,43 @@ HWND AddControl(State& state, const wchar_t* kind, const wchar_t* text, DWORD st
                 int x, int y, int width, int height, int id = 0,
                 HFONT font = nullptr, DWORD extended_style = 0) {
   const auto control = CreateWindowExW(
-      extended_style, kind, text, WS_CHILD | WS_VISIBLE | style, x, y, width, height,
+      extended_style, kind, text, WS_CHILD | WS_VISIBLE | style, Scale(x, state.dpi),
+      Scale(y, state.dpi), Scale(width, state.dpi), Scale(height, state.dpi),
       state.window, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
       GetModuleHandleW(nullptr), nullptr);
+  const auto role = RoleForFont(state, font);
   SendMessageW(control, WM_SETFONT,
-               reinterpret_cast<WPARAM>(font ? font : state.body_font), TRUE);
+               reinterpret_cast<WPARAM>(FontForRole(state, role)), TRUE);
   SetWindowTheme(control, L"Explorer", nullptr);
+  state.controls.push_back(
+      {control, RECT{x, y, x + width, y + height}, role});
   return control;
+}
+
+void RecreateFonts(State& state) {
+  const auto old_title = state.title_font;
+  const auto old_section = state.section_font;
+  const auto old_body = state.body_font;
+  const auto old_small = state.small_font;
+  state.title_font = MakeFont(30, FW_SEMIBOLD, state.dpi);
+  state.section_font = MakeFont(18, FW_SEMIBOLD, state.dpi);
+  state.body_font = MakeFont(16, FW_NORMAL, state.dpi);
+  state.small_font = MakeFont(14, FW_NORMAL, state.dpi);
+  for (const auto& item : state.controls)
+    SendMessageW(item.control, WM_SETFONT,
+                 reinterpret_cast<WPARAM>(FontForRole(state, item.font)), TRUE);
+  if (old_title) DeleteObject(old_title);
+  if (old_section) DeleteObject(old_section);
+  if (old_body) DeleteObject(old_body);
+  if (old_small) DeleteObject(old_small);
+}
+
+void LayoutControls(const State& state) {
+  for (const auto& item : state.controls) {
+    const auto rect = ScaleRect(item.logical, state.dpi);
+    MoveWindow(item.control, rect.left, rect.top, rect.right - rect.left,
+               rect.bottom - rect.top, TRUE);
+  }
 }
 
 HWND AddLabel(State& state, const wchar_t* text, int x, int y, int width,
@@ -172,7 +240,8 @@ void SetStatus(HWND window, const std::wstring& text) {
   state->status = text;
   // 状态由父窗口统一绘制；擦除并同步刷新完整固定区域，避免透明 STATIC
   // 和嵌套消息泵在快速更新时保留旧字形。
-  RedrawWindow(window, &kStatusRect, nullptr,
+  const auto status_rect = ScaleRect(kStatusRect, state->dpi);
+  RedrawWindow(window, &status_rect, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
 }
 
@@ -272,7 +341,9 @@ void DrawOwnerButton(const DRAWITEMSTRUCT& item) {
   } else if (pressed) {
     fill = RGB(237, 242, 250);
   }
-  DrawRoundedPanel(item.hDC, item.rcItem, fill, border, primary ? 12 : 9);
+  const auto dpi = GetDpiForWindow(item.hwndItem);
+  DrawRoundedPanel(item.hDC, item.rcItem, fill, border,
+                   Scale(primary ? 12 : 9, dpi));
   wchar_t caption[128]{};
   GetWindowTextW(item.hwndItem, caption, static_cast<int>(std::size(caption)));
   SetBkMode(item.hDC, TRANSPARENT);
@@ -346,16 +417,28 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     case WM_CREATE: {
       state = new State{};
       state->window = window;
-      state->title_font = MakeFont(30, FW_SEMIBOLD);
-      state->section_font = MakeFont(18, FW_SEMIBOLD);
-      state->body_font = MakeFont(16, FW_NORMAL);
-      state->small_font = MakeFont(14, FW_NORMAL);
+      state->dpi = GetDpiForWindow(window);
+      RecreateFonts(*state);
       state->background_brush = CreateSolidBrush(kBackground);
       state->card_brush = CreateSolidBrush(kCard);
       SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
       BuildInterface(*state);
       return 0;
     }
+    case WM_DPICHANGED:
+      if (state) {
+        state->dpi = HIWORD(wparam);
+        RecreateFonts(*state);
+        LayoutControls(*state);
+        const auto* suggested = reinterpret_cast<RECT*>(lparam);
+        SetWindowPos(window, nullptr, suggested->left, suggested->top,
+                     suggested->right - suggested->left,
+                     suggested->bottom - suggested->top,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
+        RedrawWindow(window, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+      }
+      return 0;
     case WM_COMMAND:
       if (!state) break;
       switch (LOWORD(wparam)) {
@@ -416,20 +499,24 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       GetClientRect(window, &client);
       FillRect(dc, &client, state ? state->background_brush
                                   : reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1));
-      RECT header{0, 0, client.right, 105};
+      RECT header{0, 0, client.right, state ? Scale(105, state->dpi) : 105};
       const auto header_brush = CreateSolidBrush(kHeader);
       FillRect(dc, &header, header_brush);
       DeleteObject(header_brush);
-      DrawRoundedPanel(dc, RECT{28, 109, 732, 286}, kCard, kBorder, 18);
-      DrawRoundedPanel(dc, RECT{28, 296, 732, 648}, kCard, kBorder, 18);
+      const auto dpi = state ? state->dpi : 96;
+      DrawRoundedPanel(dc, ScaleRect(RECT{28, 109, 732, 286}, dpi), kCard, kBorder,
+                       Scale(18, dpi));
+      DrawRoundedPanel(dc, ScaleRect(RECT{28, 296, 732, 648}, dpi), kCard, kBorder,
+                       Scale(18, dpi));
       if (state) {
         // 永远先覆盖整个状态区域，再绘制一次当前文本。
-        FillRect(dc, &kStatusRect, state->background_brush);
+        const auto scaled_status = ScaleRect(kStatusRect, state->dpi);
+        FillRect(dc, &scaled_status, state->background_brush);
         SetBkMode(dc, OPAQUE);
         SetBkColor(dc, kBackground);
         SetTextColor(dc, kSuccess);
         SelectObject(dc, state->small_font);
-        auto status_rect = kStatusRect;
+        auto status_rect = scaled_status;
         DrawTextW(dc, state->status.c_str(), -1, &status_rect,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
                       DT_NOPREFIX);
@@ -466,10 +553,14 @@ int RunPackerGui(HINSTANCE instance) {
   window_class.hbrBackground = nullptr;
   window_class.lpszClassName = kClassName;
   if (!RegisterClassExW(&window_class)) throw Error("Cannot register the packer window");
+  const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+  const auto dpi = GetDpiForSystem();
+  RECT bounds{0, 0, Scale(760, dpi), Scale(781, dpi)};
+  AdjustWindowRectExForDpi(&bounds, style, FALSE, WS_EX_CONTROLPARENT, dpi);
   const auto window = CreateWindowExW(
       WS_EX_CONTROLPARENT, kClassName, L"lw.Web2App · 网页转 Windows 应用",
-      WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, CW_USEDEFAULT,
-      CW_USEDEFAULT, 776, 820, nullptr, nullptr, instance, nullptr);
+      style, CW_USEDEFAULT, CW_USEDEFAULT, bounds.right - bounds.left,
+      bounds.bottom - bounds.top, nullptr, nullptr, instance, nullptr);
   if (!window) throw Error("Cannot create the packer window");
   const DWORD corner = 2;  // DWMWCP_ROUND
   DwmSetWindowAttribute(window, 33, &corner, sizeof(corner));

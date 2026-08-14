@@ -23,6 +23,7 @@ class Logger;
 // 为同一 app_id 选择稳定的动态端口，使浏览器 origin 跨重启保持不变。
 // 端口位于 IANA dynamic/private 范围 49152-65535。
 std::uint16_t StableAppPort(const std::string& app_id);
+bool IsExpectedResourceHost(const std::string& host, std::uint16_t port);
 
 // 为嵌入 EXE 的 ZIP 建立中央目录索引，并按资源路径独立解压。
 // 构造阶段会执行条目数量、路径和解压尺寸等安全检查。
@@ -44,6 +45,7 @@ class ZipResourceStore {
 };
 
 // 仅监听 127.0.0.1 应用专属稳定端口的静态资源 HTTP 服务。
+// 首选端口被无关进程占用时使用确定性的备用端口；单实例由独立锁负责。
 // 服务严格校验 Host，并为不存在的路径按配置提供 SPA fallback。
 class ResourceServer {
  public:
