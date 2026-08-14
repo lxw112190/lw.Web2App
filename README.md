@@ -70,13 +70,13 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 
 ### 兼容旧式 HTTP 后台
 
-勾选“兼容旧式 HTTP 后台”并填写固定后台地址后，Runtime 会启用受控反向代理。例如后台地址为 `http://192.0.2.10:8080` 时，前端需要把原来的绝对基地址改为（`192.0.2.0/24` 是专供文档使用的保留网段）：
+勾选“HTTP 后台代理”并填写固定后台地址后，Runtime 会启用受控反向代理，用于兼容旧式 HTTP 局域网后台。例如后台地址为 `http://192.0.2.10:8080` 时，前端需要把原来的绝对基地址改为（`192.0.2.0/24` 是专供文档使用的保留网段）：
 
 ```javascript
 const apiBase = "/__lw_proxy__";
 ```
 
-于是 `/__lw_proxy__/sysUser/login` 由 C++ Runtime 转发为 `http://192.0.2.10:8080/sysUser/login`。页面看到的请求仍与 `127.0.0.1` 页面同源，因此不依赖 CORS、PNA 或 `--disable-web-security`。代理固定目标 Host、拒绝跨站来源与跨 Host 重定向，过滤 hop-by-hop/代理认证 Header，限制请求体为 16 MiB、响应体为 64 MiB，并把后端 Cookie 限定到代理前缀。日志只记录方法、不含查询参数的路径、状态和耗时，不记录密码、Cookie、Authorization、查询参数或请求体。
+于是 `/__lw_proxy__/sysUser/login` 由 C++ Runtime 转发为 `http://192.0.2.10:8080/sysUser/login`。页面看到的请求仍与 `127.0.0.1` 页面同源，因此不依赖 CORS、PNA 或 `--disable-web-security`。代理固定目标 Host、拒绝跨站来源与跨 Host 重定向，过滤 hop-by-hop/代理认证 Header，限制请求体为 16 MiB、响应体为 64 MiB，并把后端 Cookie 限定到代理前缀。为避免旧系统把 Token 放在 URL 路径或查询参数中造成泄露，代理日志不记录目标路径，只记录方法、状态和耗时，也不记录密码、Cookie、Authorization 或请求体。
 
 当前版本只支持 `http://` 后台，适用于可信局域网老系统；`https://` 代理、WebSocket、NTLM/Kerberos 和多个后台 Origin 暂未支持。硬编码绝对后台地址的旧项目仍需将基地址改为 `/__lw_proxy__`，工具不会自动重写压缩后的 JavaScript。
 

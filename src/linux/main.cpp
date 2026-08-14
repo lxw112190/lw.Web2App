@@ -548,7 +548,7 @@ int RunPackerGui() {
   state->spa = gtk_check_button_new_with_label("启用 SPA fallback");
   state->logging = gtk_check_button_new_with_label("启用运行日志");
   state->debug = gtk_check_button_new_with_label("详细日志（DEBUG）");
-  state->backend_proxy = gtk_check_button_new_with_label("兼容旧式 HTTP 后台");
+  state->backend_proxy = gtk_check_button_new_with_label("HTTP 后台代理");
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->fullscreen), TRUE);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->resizable), TRUE);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->spa), TRUE);

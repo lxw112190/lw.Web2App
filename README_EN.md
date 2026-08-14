@@ -69,13 +69,13 @@ The `WebView2` directory is the writable user-data directory required by Microso
 
 ### Legacy HTTP Backend Compatibility
 
-Select **Legacy HTTP backend compatibility** and enter a fixed backend origin. For example, when the backend is `http://192.0.2.10:8080`, change the frontend API base from the absolute LAN URL as follows (`192.0.2.0/24` is reserved for documentation):
+Select **HTTP backend proxy** and enter a fixed backend origin. This controlled proxy is intended for legacy HTTP backends on a trusted LAN. For example, when the backend is `http://192.0.2.10:8080`, change the frontend API base from the absolute LAN URL as follows (`192.0.2.0/24` is reserved for documentation):
 
 ```javascript
 const apiBase = "/__lw_proxy__";
 ```
 
-The C++ Runtime forwards `/__lw_proxy__/sysUser/login` to `http://192.0.2.10:8080/sysUser/login`. To the page, the request remains same-origin with its `127.0.0.1` resource server, so it does not depend on CORS, PNA, or `--disable-web-security`. The proxy fixes the target Host, rejects cross-site callers and cross-host redirects, filters hop-by-hop and proxy-authentication headers, limits requests to 16 MiB and responses to 64 MiB, and scopes backend cookies to the proxy prefix. Logs contain only the method, path without its query string, status, and elapsed time; they never include bodies, passwords, cookies, authorization credentials, or query parameters.
+The C++ Runtime forwards `/__lw_proxy__/sysUser/login` to `http://192.0.2.10:8080/sysUser/login`. To the page, the request remains same-origin with its `127.0.0.1` resource server, so it does not depend on CORS, PNA, or `--disable-web-security`. The proxy fixes the target Host, rejects cross-site callers and cross-host redirects, filters hop-by-hop and proxy-authentication headers, limits requests to 16 MiB and responses to 64 MiB, and scopes backend cookies to the proxy prefix. Because legacy systems may place tokens in either URL path parameters or query parameters, proxy logs omit the entire target path and contain only the method, status, and elapsed time; they never include bodies, passwords, cookies, or authorization credentials.
 
 This release supports `http://` backends only and is intended for trusted legacy LAN systems. HTTPS proxying, WebSocket, NTLM/Kerberos, and multiple backend origins are not yet supported. Projects with hard-coded absolute API URLs must still change their base URL to `/__lw_proxy__`; lw.Web2App does not rewrite minified JavaScript automatically.
 

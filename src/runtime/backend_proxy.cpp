@@ -239,8 +239,8 @@ void BackendProxy::Handle(const httplib::Request& request,
   const auto upstream = client.send(outbound);
   if (!upstream) {
     if (logger_)
-      logger_->Warn("Backend proxy request failed: " + request.method + " " +
-                    request.path + " (" + httplib::to_string(upstream.error()) + ")");
+      logger_->Warn("Backend proxy request failed: " + request.method + " (" +
+                    httplib::to_string(upstream.error()) + ")");
     SetProxyError(response, 502,
                   response_too_large ? "Backend proxy response is too large"
                                      : "Backend is unavailable");
@@ -278,7 +278,7 @@ void BackendProxy::Handle(const httplib::Request& request,
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - started)
                              .count();
-    logger_->Debug("Proxy " + request.method + " " + request.path + " -> " +
+    logger_->Debug("Proxy " + request.method + " -> " +
                    std::to_string(response.status) + " in " + std::to_string(elapsed) +
                    " ms");
   }

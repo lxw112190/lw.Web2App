@@ -486,7 +486,7 @@ void BuildInterface(State& state) {
              310, 560, 140, 26, kLogging);
   AddControl(state, L"BUTTON", L"详细日志", WS_TABSTOP | BS_AUTOCHECKBOX,
              466, 560, 100, 26, kDebugLogging);
-  AddControl(state, L"BUTTON", L"兼容旧式 HTTP 后台", WS_TABSTOP | BS_AUTOCHECKBOX,
+  AddControl(state, L"BUTTON", L"HTTP 后台代理", WS_TABSTOP | BS_AUTOCHECKBOX,
              570, 560, 142, 26, kBackendProxy);
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
   AddEdit(state, L"", 48, 587, 548, kIcon, L"留空则使用默认图标");
