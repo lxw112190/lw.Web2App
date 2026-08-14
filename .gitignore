@@ -3,6 +3,7 @@
 /build-audit/
 /build-local-windows/
 /build-local-windows-ninja/
+/build-verify-windows/
 /.deps/
 /.test-work/
 /out/

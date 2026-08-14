@@ -28,6 +28,13 @@ bool IsExpectedResourceHost(const std::string& host, std::uint16_t port) {
   return host == "127.0.0.1:" + std::to_string(port);
 }
 
+std::string BuildLocalStartUrl(const std::string& origin, const std::string& start_path) {
+  if (!IsSafeStartPath(start_path)) throw Error("Unsafe manifest start path");
+  auto base = origin;
+  while (!base.empty() && base.back() == '/') base.pop_back();
+  return base + start_path;
+}
+
 // ZipResourceStore 的私有实现，负责 miniz 回调、宽路径文件流、索引和缓存。
 struct ZipResourceStore::Impl {
   LoadedPayload payload;

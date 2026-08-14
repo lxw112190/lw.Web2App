@@ -35,4 +35,20 @@ void RunResourceTests() {
         "wrong Host port rejected");
   Check(!lwweb::IsExpectedResourceHost("evil.example", 53182),
         "remote Host rejected");
+  Check(lwweb::BuildLocalStartUrl("http://127.0.0.1:53182/", "/") ==
+            "http://127.0.0.1:53182/",
+        "root start URL composed");
+  Check(lwweb::BuildLocalStartUrl("http://127.0.0.1:53182/", "/pages/login.html") ==
+            "http://127.0.0.1:53182/pages/login.html",
+        "nested entry start URL composed");
+  Check(lwweb::BuildLocalStartUrl("http://127.0.0.1:53182", "/login?from=app#form") ==
+            "http://127.0.0.1:53182/login?from=app#form",
+        "route query and fragment preserved");
+  bool unsafe_start_rejected = false;
+  try {
+    (void)lwweb::BuildLocalStartUrl("http://127.0.0.1:53182/", "//example.com");
+  } catch (...) {
+    unsafe_start_rejected = true;
+  }
+  Check(unsafe_start_rejected, "unsafe start URL rejected");
 }

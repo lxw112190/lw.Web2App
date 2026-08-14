@@ -31,6 +31,7 @@ Linux graphical packager (Ubuntu 22.04):
 - ZIP central-directory indexing and per-request decompression instead of eager extraction.
 - A 32 MiB LRU cache for small hot resources; large files do not remain in memory.
 - SPA fallback for history-mode Vue Router and React Router applications.
+- Deterministic GUI discovery of `.html`/`.htm` launch pages; separate Manifest, GUI, and CLI `entry` and `start_path` settings support both multi-page entry files and initial SPA routes.
 - The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
 - True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
@@ -44,7 +45,7 @@ lw.Web2App creates a single-file application using a **platform Runner plus an e
 
 ### Packaging
 
-1. **Validate the input**: local mode checks that the static directory and entry HTML exist, then enforces limits on file count, individual size, and total size.
+1. **Validate the input**: local mode scans and verifies the HTML selected by `entry`, ensures `start_path` cannot leave the private local service, then enforces limits on file count, individual size, and total size.
 2. **Copy the Runner**: the current `lw.Web2App.exe` or `lw.Web2App` supplies the native PE/ELF prefix. If an already packaged app is used as the packer, only its original Runner prefix is copied, so old payloads are not nested.
 3. **Write platform metadata**: Windows updates PE icons and version fields; Linux adds executable permissions. Per-generated-app desktop files, icons, and DEB metadata are planned separately.
 4. **Build the ZIP**: files are streamed into a temporary ZIP under normalized relative paths, avoiding simultaneous in-memory copies of the source and complete archive. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
@@ -59,7 +60,7 @@ Online URL mode does not snapshot or embed the remote website. Its ZIP is empty 
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
 4. The Runner first acquires an `app_id`-specific single-instance lock through a Windows named mutex or Linux `flock`, then starts the private HTTP service on its stable preferred `127.0.0.1` port. The service validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback. If an unrelated process occupies the preferred port, deterministic alternatives are tried and logged.
 5. Small frequently used resources are held in a 32 MiB LRU cache; large files are read on demand and do not remain resident.
-6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Both navigate to the private local address or online URL and honor title, dimensions, resizing, fullscreen, and developer-tool settings. `F11` toggles fullscreen and `Esc` exits it.
+6. Windows creates a WebView2 Controller; Linux creates a WebKitGTK WebView inside a GTK3 window. Local mode combines the private service origin with Manifest `start_path`; when a requested file is absent and SPA fallback is enabled, the server returns `entry`. A traditional multi-page app can use `entry=login.html` with `start_path=/login.html`, while a Vue/React history route can use `entry=index.html` with `start_path=/login`. Legacy packages without `start_path` default to `/`. Window behavior also comes from the Manifest; `F11` toggles fullscreen and `Esc` exits it.
 7. Each app has a stable `app_id`. Windows data lives under `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`; Linux data and cache use `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk` and `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`.
 
 SHA-256 detects resource corruption or modification; it does not authenticate a publisher. Trusted distribution of the manifest and complete EXE still requires a signing mechanism such as Authenticode.
@@ -206,7 +207,7 @@ If they are absent, CMake downloads pinned versions. Set `-DLWWEB_DEPS_CACHE=<di
 
 ### Package a local static directory
 
-The entry is automatically detected, preferring `index.html`:
+The GUI and CLI scan `.html`/`.htm` files deterministically and prefer a root `index.html`. `entry` names the real HTML inside the ZIP; `start_path` is the first URL path opened by the WebView:
 
 ```powershell
 lw.Web2App.exe pack .\dist .\MyApp.exe --title "My App"
@@ -217,6 +218,7 @@ Full example:
 ```powershell
 lw.Web2App.exe pack .\dist .\MyApp.exe `
   --entry index.html `
+  --start-path /login `
   --title "My App" `
   --app-id com.example.myapp `
   --width 1280 `
@@ -253,6 +255,8 @@ Linux uses the same command structure without `.exe`; generated files automatica
 
 Additional options:
 
+- `--entry`: select the real archived HTML, such as `login.html` or `pages/login.html`.
+- `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
 - `--no-log`: disable runtime logging in the generated application.

@@ -220,10 +220,13 @@ void PackApplication(const PackOptions& options) {
       manifest.app_id = "app-" + HexDigest(Sha256(
           reinterpret_cast<const std::uint8_t*>(manifest.title.data()), manifest.title.size()))
                               .substr(0, 24);
+    if (manifest.mode == AppMode::Local && !IsCanonicalArchivePath(manifest.entry))
+      throw Error("Entry HTML path must be a canonical relative archive path");
     ValidateManifest(manifest);
     log.Info("Packaging started");
     log.Info("Mode: " + std::string(manifest.mode == AppMode::Local ? "local" : "url"));
     log.Info("Entry: " + (manifest.mode == AppMode::Local ? manifest.entry : manifest.url));
+    if (manifest.mode == AppMode::Local) log.Info("Start path: " + manifest.start_path);
     log.Info("SPA fallback: " + std::string(manifest.spa_fallback ? "true" : "false"));
     if (manifest.mode == AppMode::Local)
       log.Info("Source: " + options.source_directory.u8string());

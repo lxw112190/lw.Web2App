@@ -36,6 +36,29 @@ std::optional<std::string> NormalizeArchivePath(std::string path) {
   return result;
 }
 
+bool IsCanonicalArchivePath(const std::string& path) {
+  const auto normalized = NormalizeArchivePath(path);
+  return normalized && *normalized == path;
+}
+
+bool IsSafeStartPath(const std::string& path) {
+  if (path.empty() || path.size() > 4096 || path.front() != '/' ||
+      (path.size() > 1 && path[1] == '/'))
+    return false;
+  return std::none_of(path.begin(), path.end(), [](unsigned char value) {
+    return value == '\\' || value == 0 || value < 0x20 || value == 0x7f;
+  });
+}
+
+std::string SuggestedStartPath(const std::string& entry) {
+  if (!IsCanonicalArchivePath(entry)) throw Error("Unsafe entry HTML path");
+  auto lower = entry;
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char value) {
+    return static_cast<char>(std::tolower(value));
+  });
+  return lower == "index.html" || lower == "index.htm" ? "/" : "/" + entry;
+}
+
 std::string MimeTypeForPath(const std::string& path) {
   auto dot = path.find_last_of('.');
   std::string ext = dot == std::string::npos ? "" : path.substr(dot);
@@ -60,14 +83,40 @@ std::string MimeTypeForPath(const std::string& path) {
   return it == types.end() ? "application/octet-stream" : it->second;
 }
 
-std::filesystem::path FindDefaultEntry(const std::filesystem::path& root) {
+std::vector<std::string> FindHtmlEntries(const std::filesystem::path& root) {
   if (!std::filesystem::is_directory(root)) throw Error("Source is not a directory");
-  const auto preferred = root / L"index.html";
-  if (std::filesystem::is_regular_file(preferred)) return preferred;
+  std::vector<std::string> entries;
   for (const auto& item : std::filesystem::recursive_directory_iterator(root)) {
-    if (item.is_regular_file() && item.path().extension() == L".html") return item.path();
+    if (!item.is_regular_file()) continue;
+    auto extension = item.path().extension().u8string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    if (extension != ".html" && extension != ".htm") continue;
+    entries.push_back(std::filesystem::relative(item.path(), root).generic_u8string());
   }
-  throw Error("No HTML entry file was found");
+  std::sort(entries.begin(), entries.end(), [](const std::string& left,
+                                                const std::string& right) {
+    auto lower = [](std::string value) {
+      std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+      });
+      return value;
+    };
+    const auto left_lower = lower(left);
+    const auto right_lower = lower(right);
+    const bool left_index = left_lower == "index.html" || left_lower == "index.htm";
+    const bool right_index = right_lower == "index.html" || right_lower == "index.htm";
+    if (left_index != right_index) return left_index;
+    if (left_lower != right_lower) return left_lower < right_lower;
+    return left < right;
+  });
+  return entries;
+}
+
+std::filesystem::path FindDefaultEntry(const std::filesystem::path& root) {
+  const auto entries = FindHtmlEntries(root);
+  if (entries.empty()) throw Error("No HTML entry file was found");
+  return root / std::filesystem::u8path(entries.front());
 }
 
 bool IsSupportedHttpUrl(const std::string& url) {

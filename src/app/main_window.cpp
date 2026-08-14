@@ -34,6 +34,8 @@ enum ControlId {
   kModeUrl,
   kSource,
   kBrowseSource,
+  kEntry,
+  kStartPath,
   kTitle,
   kWidth,
   kHeight,
@@ -49,6 +51,8 @@ enum ControlId {
   kPack,
   kSourceLabel,
   kModeHint,
+  kEntryLabel,
+  kStartPathLabel,
 };
 
 enum class FontRole { Title, Section, Body, Small };
@@ -75,7 +79,7 @@ struct State {
   bool busy = false;
 };
 
-constexpr RECT kStatusRect{48, 731, 712, 757};
+constexpr RECT kStatusRect{48, 795, 712, 821};
 
 int Scale(int value, UINT dpi) { return MulDiv(value, static_cast<int>(dpi), 96); }
 
@@ -173,6 +177,12 @@ HWND AddButton(State& state, const wchar_t* text, int x, int y, int width,
                     WS_TABSTOP | BS_OWNERDRAW, x, y, width, height, id);
 }
 
+HWND AddCombo(State& state, int x, int y, int width, int id) {
+  return AddControl(state, L"COMBOBOX", L"",
+                    WS_TABSTOP | CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_VSCROLL,
+                    x, y, width, 220, id, state.body_font, WS_EX_CLIENTEDGE);
+}
+
 std::wstring Text(HWND window, int id) {
   const auto control = GetDlgItem(window, id);
   const auto length = GetWindowTextLengthW(control);
@@ -180,6 +190,34 @@ std::wstring Text(HWND window, int id) {
   GetWindowTextW(control, value.data(), length + 1);
   value.resize(length);
   return value;
+}
+
+void UpdateSuggestedStartPath(HWND window) {
+  const auto entry = WideToUtf8(Text(window, kEntry));
+  if (entry.empty()) return;
+  try {
+    SetWindowTextW(GetDlgItem(window, kStartPath),
+                   Utf8ToWide(SuggestedStartPath(entry)).c_str());
+  } catch (...) {
+  }
+}
+
+void RefreshHtmlEntries(HWND window) {
+  const auto combo = GetDlgItem(window, kEntry);
+  SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+  std::vector<std::string> entries;
+  try {
+    const auto source = Text(window, kSource);
+    if (!source.empty()) entries = FindHtmlEntries(std::filesystem::path(source));
+  } catch (...) {
+  }
+  if (entries.empty()) entries.push_back("index.html");
+  for (const auto& entry : entries) {
+    const auto wide = Utf8ToWide(entry);
+    SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(wide.c_str()));
+  }
+  SendMessageW(combo, CB_SETCURSEL, 0, 0);
+  UpdateSuggestedStartPath(window);
 }
 
 std::filesystem::path PickFolder(HWND owner) {
@@ -256,6 +294,11 @@ void UpdateMode(HWND window) {
                reinterpret_cast<LPARAM>(local ? L"例如：D:\\project\\dist"
                                                : L"例如：https://example.com"));
   EnableWindow(GetDlgItem(window, kBrowseSource), local);
+  EnableWindow(GetDlgItem(window, kEntry), local);
+  EnableWindow(GetDlgItem(window, kStartPath), local);
+  EnableWindow(GetDlgItem(window, kSpa), local);
+  EnableWindow(GetDlgItem(window, kEntryLabel), local);
+  EnableWindow(GetDlgItem(window, kStartPathLabel), local);
   InvalidateRect(window, nullptr, TRUE);
 }
 
@@ -288,9 +331,8 @@ void Pack(HWND window) {
     } else {
       options.manifest.mode = AppMode::Local;
       options.source_directory = Text(window, kSource);
-      const auto entry = FindDefaultEntry(options.source_directory);
-      options.manifest.entry = WideToUtf8(
-          std::filesystem::relative(entry, options.source_directory).generic_wstring());
+      options.manifest.entry = WideToUtf8(Text(window, kEntry));
+      options.manifest.start_path = WideToUtf8(Text(window, kStartPath));
     }
     options.progress = [window](const std::string& message) {
       SetStatus(window, LocalizeProgress(message));
@@ -378,37 +420,44 @@ void BuildInterface(State& state) {
   AddEdit(state, L"", 48, 228, 548, kSource, L"例如：D:\\project\\dist");
   AddButton(state, L"选择目录", 610, 228, 102, 34, kBrowseSource);
 
-  AddLabel(state, L"02  应用设置", 48, 313, 200, 28, 0, state.section_font);
-  AddLabel(state, L"应用名称", 48, 355, 120, 22, 0, state.small_font);
-  AddEdit(state, L"我的网页应用", 48, 379, 664, kTitle, L"显示在窗口标题栏中的名称");
-  AddLabel(state, L"窗口尺寸", 48, 427, 120, 22, 0, state.small_font);
-  AddEdit(state, L"1280", 48, 451, 92, kWidth, nullptr, ES_NUMBER);
-  AddLabel(state, L"×", 150, 457, 24, 22, 0, state.section_font);
-  AddEdit(state, L"800", 180, 451, 92, kHeight, nullptr, ES_NUMBER);
+  AddLabel(state, L"启动页", 48, 274, 120, 22, kEntryLabel, state.small_font);
+  AddLabel(state, L"启动路径", 376, 274, 120, 22, kStartPathLabel, state.small_font);
+  AddCombo(state, 48, 298, 300, kEntry);
+  AddEdit(state, L"/", 376, 298, 336, kStartPath,
+          L"例如：/、/login、/#/login");
+
+  AddLabel(state, L"02  应用设置", 48, 377, 200, 28, 0, state.section_font);
+  AddLabel(state, L"应用名称", 48, 419, 120, 22, 0, state.small_font);
+  AddEdit(state, L"我的网页应用", 48, 443, 664, kTitle, L"显示在窗口标题栏中的名称");
+  AddLabel(state, L"窗口尺寸", 48, 491, 120, 22, 0, state.small_font);
+  AddEdit(state, L"1280", 48, 515, 92, kWidth, nullptr, ES_NUMBER);
+  AddLabel(state, L"×", 150, 521, 24, 22, 0, state.section_font);
+  AddEdit(state, L"800", 180, 515, 92, kHeight, nullptr, ES_NUMBER);
   AddControl(state, L"BUTTON", L"默认全屏显示", WS_TABSTOP | BS_AUTOCHECKBOX,
-             309, 454, 132, 26, kFullscreen);
+             309, 518, 132, 26, kFullscreen);
   AddControl(state, L"BUTTON", L"允许调整大小", WS_TABSTOP | BS_AUTOCHECKBOX,
-             443, 454, 130, 26, kResizable);
+             443, 518, 130, 26, kResizable);
   AddControl(state, L"BUTTON", L"SPA 路由回退", WS_TABSTOP | BS_AUTOCHECKBOX,
-             576, 454, 130, 26, kSpa);
+             576, 518, 130, 26, kSpa);
   CheckDlgButton(state.window, kFullscreen, BST_CHECKED);
   CheckDlgButton(state.window, kResizable, BST_CHECKED);
   CheckDlgButton(state.window, kSpa, BST_CHECKED);
 
-  AddLabel(state, L"应用图标（PNG / ICO，可选）", 48, 499, 240, 22, 0,
+  AddLabel(state, L"应用图标（PNG / ICO，可选）", 48, 563, 240, 22, 0,
            state.small_font);
   AddControl(state, L"BUTTON", L"启用运行日志", WS_TABSTOP | BS_AUTOCHECKBOX,
-             330, 496, 140, 26, kLogging);
+             330, 560, 140, 26, kLogging);
   AddControl(state, L"BUTTON", L"详细日志", WS_TABSTOP | BS_AUTOCHECKBOX,
-             500, 496, 110, 26, kDebugLogging);
+             500, 560, 110, 26, kDebugLogging);
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
-  AddEdit(state, L"", 48, 523, 548, kIcon, L"留空则使用默认图标");
-  AddButton(state, L"选择图标", 610, 523, 102, 34, kBrowseIcon);
-  AddLabel(state, L"输出位置", 48, 571, 120, 22, 0, state.small_font);
-  AddEdit(state, L"", 48, 595, 548, kOutput, L"选择生成的 .exe 文件位置");
-  AddButton(state, L"选择位置", 610, 595, 102, 34, kBrowseOutput);
+  AddEdit(state, L"", 48, 587, 548, kIcon, L"留空则使用默认图标");
+  AddButton(state, L"选择图标", 610, 587, 102, 34, kBrowseIcon);
+  AddLabel(state, L"输出位置", 48, 635, 120, 22, 0, state.small_font);
+  AddEdit(state, L"", 48, 659, 548, kOutput, L"选择生成的 .exe 文件位置");
+  AddButton(state, L"选择位置", 610, 659, 102, 34, kBrowseOutput);
 
-  AddButton(state, L"生成 Windows EXE", 48, 668, 664, 48, kPack);
+  AddButton(state, L"生成 Windows EXE", 48, 732, 664, 48, kPack);
+  RefreshHtmlEntries(state.window);
 }
 
 LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
@@ -452,9 +501,18 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
           return 0;
         case kBrowseSource: {
           const auto path = PickFolder(window);
-          if (!path.empty()) SetWindowTextW(GetDlgItem(window, kSource), path.c_str());
+          if (!path.empty()) {
+            SetWindowTextW(GetDlgItem(window, kSource), path.c_str());
+            RefreshHtmlEntries(window);
+          }
           return 0;
         }
+        case kSource:
+          if (HIWORD(wparam) == EN_KILLFOCUS) RefreshHtmlEntries(window);
+          return 0;
+        case kEntry:
+          if (HIWORD(wparam) == CBN_SELCHANGE) UpdateSuggestedStartPath(window);
+          return 0;
         case kBrowseIcon: {
           const auto path = PickFile(
               window, L"选择应用图标",
@@ -504,9 +562,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       FillRect(dc, &header, header_brush);
       DeleteObject(header_brush);
       const auto dpi = state ? state->dpi : 96;
-      DrawRoundedPanel(dc, ScaleRect(RECT{28, 109, 732, 286}, dpi), kCard, kBorder,
+      DrawRoundedPanel(dc, ScaleRect(RECT{28, 109, 732, 350}, dpi), kCard, kBorder,
                        Scale(18, dpi));
-      DrawRoundedPanel(dc, ScaleRect(RECT{28, 296, 732, 648}, dpi), kCard, kBorder,
+      DrawRoundedPanel(dc, ScaleRect(RECT{28, 360, 732, 712}, dpi), kCard, kBorder,
                        Scale(18, dpi));
       if (state) {
         // 永远先覆盖整个状态区域，再绘制一次当前文本。
@@ -555,7 +613,7 @@ int RunPackerGui(HINSTANCE instance) {
   if (!RegisterClassExW(&window_class)) throw Error("Cannot register the packer window");
   const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
   const auto dpi = GetDpiForSystem();
-  RECT bounds{0, 0, Scale(760, dpi), Scale(781, dpi)};
+  RECT bounds{0, 0, Scale(760, dpi), Scale(845, dpi)};
   AdjustWindowRectExForDpi(&bounds, style, FALSE, WS_EX_CONTROLPARENT, dpi);
   const auto window = CreateWindowExW(
       WS_EX_CONTROLPARENT, kClassName, L"lw.Web2App · 网页转 Windows 应用",

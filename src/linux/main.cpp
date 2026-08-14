@@ -168,13 +168,15 @@ int RunPayloadApp(const LoadedPayload& payload) {
   logger.Info("App ID: " + app_id);
   logger.Info("Entry: " + (payload.manifest.mode == AppMode::Local ? payload.manifest.entry
                                                                     : payload.manifest.url));
+  if (payload.manifest.mode == AppMode::Local)
+    logger.Info("Start path: " + payload.manifest.start_path);
   SingleInstanceGuard instance_guard(app_id);
 
   std::unique_ptr<ResourceServer> server;
   std::string navigation;
   if (payload.manifest.mode == AppMode::Local) {
     server = std::make_unique<ResourceServer>(payload, SecurityLimits{}, &logger);
-    navigation = server->Start();
+    navigation = BuildLocalStartUrl(server->Start(), payload.manifest.start_path);
   } else {
     navigation = payload.manifest.url;
   }
@@ -250,6 +252,8 @@ struct GuiState {
   GtkWidget* source_label{};
   GtkWidget* source{};
   GtkWidget* browse_source{};
+  GtkWidget* entry{};
+  GtkWidget* start_path{};
   GtkWidget* title{};
   GtkWidget* width{};
   GtkWidget* height{};
@@ -264,6 +268,38 @@ struct GuiState {
 };
 
 const char* EntryText(GtkWidget* entry) { return gtk_entry_get_text(GTK_ENTRY(entry)); }
+
+std::string ComboText(GtkWidget* combo) {
+  auto* text = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(combo));
+  if (!text) return {};
+  std::string result(text);
+  g_free(text);
+  return result;
+}
+
+void UpdateSuggestedStartPath(GuiState* state) {
+  const auto entry = ComboText(state->entry);
+  if (entry.empty()) return;
+  try {
+    gtk_entry_set_text(GTK_ENTRY(state->start_path), SuggestedStartPath(entry).c_str());
+  } catch (...) {
+  }
+}
+
+void RefreshHtmlEntries(GuiState* state) {
+  gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(state->entry));
+  std::vector<std::string> entries;
+  try {
+    const std::string source = EntryText(state->source);
+    if (!source.empty()) entries = FindHtmlEntries(std::filesystem::u8path(source));
+  } catch (...) {
+  }
+  if (entries.empty()) entries.push_back("index.html");
+  for (const auto& entry : entries)
+    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state->entry), entry.c_str());
+  gtk_combo_box_set_active(GTK_COMBO_BOX(state->entry), 0);
+  UpdateSuggestedStartPath(state);
+}
 
 void SetStatus(GuiState* state, const std::string& message, bool error = false) {
   gtk_label_set_text(GTK_LABEL(state->status), message.c_str());
@@ -294,6 +330,16 @@ void OnBrowseSource(GtkButton*, gpointer data) {
   auto* state = static_cast<GuiState*>(data);
   ChoosePath(state->window, state->source, GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
              "选择网站目录");
+  RefreshHtmlEntries(state);
+}
+
+gboolean OnSourceFocusOut(GtkWidget*, GdkEvent*, gpointer data) {
+  RefreshHtmlEntries(static_cast<GuiState*>(data));
+  return FALSE;
+}
+
+void OnEntryChanged(GtkComboBox*, gpointer data) {
+  UpdateSuggestedStartPath(static_cast<GuiState*>(data));
 }
 
 void OnBrowseOutput(GtkButton*, gpointer data) {
@@ -307,6 +353,8 @@ void OnModeChanged(GtkToggleButton*, gpointer data) {
   const bool local = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->local_radio));
   gtk_label_set_text(GTK_LABEL(state->source_label), local ? "网站目录" : "网站 URL");
   gtk_widget_set_sensitive(state->browse_source, local);
+  gtk_widget_set_sensitive(state->entry, local);
+  gtk_widget_set_sensitive(state->start_path, local);
   gtk_widget_set_sensitive(state->spa, local);
 }
 
@@ -329,10 +377,8 @@ void OnPack(GtkButton*, gpointer data) {
     options.manifest.mode = local ? AppMode::Local : AppMode::Url;
     if (local) {
       options.source_directory = EntryText(state->source);
-      options.manifest.entry =
-          std::filesystem::relative(FindDefaultEntry(options.source_directory),
-                                    options.source_directory)
-              .generic_string();
+      options.manifest.entry = ComboText(state->entry);
+      options.manifest.start_path = EntryText(state->start_path);
     } else {
       options.manifest.url = EntryText(state->source);
     }
@@ -375,7 +421,7 @@ int RunPackerGui() {
   auto state = std::make_unique<GuiState>();
   state->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   gtk_window_set_title(GTK_WINDOW(state->window), "lw.Web2App - Linux 网页应用打包器");
-  gtk_window_set_default_size(GTK_WINDOW(state->window), 760, 600);
+  gtk_window_set_default_size(GTK_WINDOW(state->window), 760, 680);
   gtk_container_set_border_width(GTK_CONTAINER(state->window), 24);
 
   auto* root = gtk_box_new(GTK_ORIENTATION_VERTICAL, 16);
@@ -407,15 +453,21 @@ int RunPackerGui() {
   gtk_widget_set_hexpand(state->source, TRUE);
   gtk_grid_attach(grid, state->source, 1, 0, 1, 1);
   gtk_grid_attach(grid, state->browse_source, 2, 0, 1, 1);
+  state->entry = gtk_combo_box_text_new();
+  AttachRow(grid, 1, "启动页", state->entry);
+  state->start_path = gtk_entry_new();
+  gtk_entry_set_text(GTK_ENTRY(state->start_path), "/");
+  gtk_entry_set_placeholder_text(GTK_ENTRY(state->start_path), "/、/login 或 /#/login");
+  AttachRow(grid, 2, "启动路径", state->start_path);
   state->title = gtk_entry_new();
   gtk_entry_set_text(GTK_ENTRY(state->title), "我的网页应用");
-  AttachRow(grid, 1, "窗口标题", state->title);
+  AttachRow(grid, 3, "窗口标题", state->title);
   state->width = gtk_entry_new();
   state->height = gtk_entry_new();
   gtk_entry_set_text(GTK_ENTRY(state->width), "1280");
   gtk_entry_set_text(GTK_ENTRY(state->height), "800");
-  AttachRow(grid, 2, "窗口宽度", state->width);
-  AttachRow(grid, 3, "窗口高度", state->height);
+  AttachRow(grid, 4, "窗口宽度", state->width);
+  AttachRow(grid, 5, "窗口高度", state->height);
   state->fullscreen = gtk_check_button_new_with_label("默认全屏（F11 切换，Esc 退出全屏）");
   state->resizable = gtk_check_button_new_with_label("允许调整窗口大小");
   state->spa = gtk_check_button_new_with_label("启用 SPA fallback");
@@ -431,11 +483,11 @@ int RunPackerGui() {
   gtk_box_pack_start(GTK_BOX(checks), state->spa, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(checks), state->logging, FALSE, FALSE, 0);
   gtk_box_pack_start(GTK_BOX(checks), state->debug, FALSE, FALSE, 0);
-  AttachRow(grid, 4, "运行选项", checks);
+  AttachRow(grid, 6, "运行选项", checks);
   state->output = gtk_entry_new();
   gtk_entry_set_text(GTK_ENTRY(state->output), DefaultOutputPath().c_str());
   auto* browse_output = gtk_button_new_with_label("浏览…");
-  AttachRow(grid, 5, "输出文件", state->output, browse_output);
+  AttachRow(grid, 7, "输出文件", state->output, browse_output);
 
   state->pack = gtk_button_new_with_label("生成 Linux 应用");
   gtk_widget_set_name(state->pack, "primary-button");
@@ -458,9 +510,12 @@ int RunPackerGui() {
 
   g_signal_connect(state->window, "destroy", G_CALLBACK(OnRuntimeDestroy), nullptr);
   g_signal_connect(state->browse_source, "clicked", G_CALLBACK(OnBrowseSource), state.get());
+  g_signal_connect(state->source, "focus-out-event", G_CALLBACK(OnSourceFocusOut), state.get());
+  g_signal_connect(state->entry, "changed", G_CALLBACK(OnEntryChanged), state.get());
   g_signal_connect(browse_output, "clicked", G_CALLBACK(OnBrowseOutput), state.get());
   g_signal_connect(state->local_radio, "toggled", G_CALLBACK(OnModeChanged), state.get());
   g_signal_connect(state->pack, "clicked", G_CALLBACK(OnPack), state.get());
+  RefreshHtmlEntries(state.get());
   gtk_widget_show_all(state->window);
   gtk_main();
   return 0;

@@ -31,6 +31,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - 只索引 ZIP 中央目录，请求资源时才解压对应文件，不会启动即展开全部内容。
 - 32 MiB LRU 缓存小型热点资源，大文件不长期驻留内存。
 - 支持 Vue Router、React Router 等 history 模式所需的 SPA fallback。
+- GUI 自动扫描并稳定排序 `.html`/`.htm` 启动页；Manifest、GUI 与 CLI 分别用 `entry` 和 `start_path` 支持传统多页面入口及 SPA 初始路由。
 - 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
 - Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
@@ -45,7 +46,7 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 
 ### 打包阶段
 
-1. **检查输入**：本地模式先确认静态目录和入口 HTML 存在，并对文件数量、单文件大小及总大小应用安全上限。
+1. **检查输入**：本地模式先扫描并确认 `entry` 指定的入口 HTML 存在，校验 `start_path` 只能定位当前本地服务，并对文件数量、单文件大小及总大小应用安全上限。
 2. **复制 Runner**：以当前平台的 `lw.Web2App.exe` 或 `lw.Web2App` 为模板，只复制其原始 PE/ELF Runner 部分。即使使用已经打包过的应用再次打包，也不会嵌套旧载荷。
 3. **写入平台元数据**：Windows 更新图标、产品名、文件说明、公司、版本和版权等 PE 资源；Linux 为生成文件补充可执行权限。Linux 桌面图标与菜单项由 lw.Web2App 自身的 DEB 包安装，任意生成应用的独立桌面集成留待后续版本。
 4. **构建 ZIP**：递归读取静态目录，将规范化后的相对路径流式压缩到临时 ZIP 文件，避免把源文件和完整 ZIP 同时驻留内存。绝对路径、盘符、`..`、NUL 和重复路径会被拒绝。
@@ -60,7 +61,7 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 3. 本地模式只读取 ZIP 中央目录建立索引，不会把网站完整解压到磁盘或一次性载入内存。
 4. Runner 先通过 Windows Named Mutex 或 Linux `flock` 获取 `app_id` 专属单实例锁，再在 `127.0.0.1` 的稳定首选端口启动 HTTP 服务。服务严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback；首选端口被无关进程占用时会尝试确定性的备用端口并写入日志。
 5. 小型热点资源进入 32 MiB LRU 缓存；大文件按请求读取，不长期占用内存。
-6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。两端都导航到本地应用专属地址或在线 URL，窗口标题、尺寸、是否可调整、默认全屏和开发者工具策略来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
+6. Windows 原生窗口创建 WebView2 Controller；Linux GTK3 窗口创建 WebKitGTK WebView。本地模式把私有服务地址与 Manifest 的 `start_path` 组合后导航；请求文件不存在且启用了 SPA fallback 时返回 `entry`。因此传统多页面应用可使用 `entry=login.html`、`start_path=/login.html`，Vue/React history 路由可使用 `entry=index.html`、`start_path=/login`。旧包没有 `start_path` 时默认使用 `/`。窗口策略同样来自 Manifest；可用 `F11` 切换全屏、`Esc` 退出。
 7. 每个应用使用稳定 `app_id`。Windows 浏览器数据位于 `%LOCALAPPDATA%\lw.Web2App\apps\<app_id>\WebView2`；Linux 数据位于 `$XDG_DATA_HOME/lw.Web2App/apps/<app_id>/webkitgtk`，缓存位于 `$XDG_CACHE_HOME/lw.Web2App/apps/<app_id>/webkitgtk`。重命名应用不会改变存储位置。
 
 SHA-256 用于发现资源损坏或修改，不等同于发布者认证；Manifest 配置和整个 EXE 的可信发布仍应依靠 Authenticode 等代码签名机制。
@@ -213,7 +214,7 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
 
 ### 打包本地静态目录
 
-入口文件会自动优先寻找 `index.html`：
+GUI 和 CLI 都会扫描 `.html`/`.htm`，稳定排序并优先选择根目录的 `index.html`。`entry` 表示 ZIP 中真实存在的 HTML，`start_path` 表示 WebView 首次打开的 URL 路径：
 
 ```powershell
 lw.Web2App.exe pack .\dist .\MyApp.exe --title "我的应用"
@@ -224,6 +225,7 @@ lw.Web2App.exe pack .\dist .\MyApp.exe --title "我的应用"
 ```powershell
 lw.Web2App.exe pack .\dist .\MyApp.exe `
   --entry index.html `
+  --start-path /login `
   --title "我的应用" `
   --app-id com.example.myapp `
   --width 1280 `
@@ -260,6 +262,8 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 
 其他开关：
 
+- `--entry`：指定归档内真实入口 HTML，例如 `login.html` 或 `pages/login.html`。
+- `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
 - `--no-log`：关闭生成应用的运行日志。

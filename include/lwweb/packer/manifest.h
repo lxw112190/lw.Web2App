@@ -22,7 +22,9 @@ struct Manifest {
   std::uint32_t version = 1;
   AppMode mode = AppMode::Local;
   std::string app_id;
+  // entry 是 ZIP 中真实存在的 HTML；start_path 是 WebView 首次打开的本地 URL 路径。
   std::string entry = "index.html";
+  std::string start_path = "/";
   std::string url;
   std::string title = "lw.Web2App App";
   std::uint32_t width = 1280;

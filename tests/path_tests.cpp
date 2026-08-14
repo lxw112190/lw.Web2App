@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 #include <string>
+#include <filesystem>
+#include <fstream>
 
 namespace {
 void Check(bool condition, const char* message) {
@@ -25,8 +27,37 @@ void RunPathTests() {
   Check(!lwweb::NormalizeArchivePath(std::string(4097, 'a')), "overlong path rejected");
   Check(lwweb::NormalizeArchivePath(u8"资源/首页.html") == u8"资源/首页.html",
         "UTF-8 path accepted");
+  Check(lwweb::IsCanonicalArchivePath("pages/login.html"), "canonical entry accepted");
+  Check(!lwweb::IsCanonicalArchivePath("/login.html"), "absolute-looking entry rejected");
+  Check(!lwweb::IsCanonicalArchivePath("pages\\login.html"), "backslash entry rejected");
+  Check(lwweb::IsSafeStartPath("/"), "root start path accepted");
+  Check(lwweb::IsSafeStartPath("/login?from=app#form"), "route start path accepted");
+  Check(lwweb::IsSafeStartPath("/#/login"), "hash route accepted");
+  Check(!lwweb::IsSafeStartPath("login"), "relative start path rejected");
+  Check(!lwweb::IsSafeStartPath("//example.com"), "scheme-relative start path rejected");
+  Check(!lwweb::IsSafeStartPath("/pages\\login"), "backslash start path rejected");
+  Check(!lwweb::IsSafeStartPath(std::string("/a\0b", 4)), "NUL start path rejected");
+  Check(lwweb::SuggestedStartPath("index.html") == "/", "root index suggests root route");
+  Check(lwweb::SuggestedStartPath("login.html") == "/login.html",
+        "alternate entry suggests its file route");
+  Check(lwweb::SuggestedStartPath("pages/login.html") == "/pages/login.html",
+        "nested entry suggests a nested route");
   Check(lwweb::MimeTypeForPath("index.HTML") == "text/html; charset=utf-8", "HTML MIME");
   Check(lwweb::MimeTypeForPath("dotnet.wasm") == "application/wasm", "WASM MIME");
   Check(lwweb::IsSupportedHttpUrl("https://example.com"), "HTTPS URL accepted");
   Check(!lwweb::IsSupportedHttpUrl("file:///tmp/a"), "file URL rejected");
+
+  const auto root = std::filesystem::temp_directory_path() / "lwweb-entry-list-test";
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+  std::filesystem::create_directories(root / "pages");
+  std::ofstream(root / "login.html") << "login";
+  std::ofstream(root / "index.HTML") << "index";
+  std::ofstream(root / "pages" / "admin.htm") << "admin";
+  const auto entries = lwweb::FindHtmlEntries(root);
+  Check(entries.size() == 3, "HTML and HTM entries discovered recursively");
+  Check(entries.front() == "index.HTML", "root index entry is preferred deterministically");
+  Check(entries[1] == "login.html" && entries[2] == "pages/admin.htm",
+        "remaining HTML entries are sorted");
+  std::filesystem::remove_all(root, ignored);
 }

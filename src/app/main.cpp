@@ -116,12 +116,15 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   state->logger.Info("Entry: " + (payload.manifest.mode == AppMode::Local
                                       ? payload.manifest.entry
                                       : payload.manifest.url));
+  if (payload.manifest.mode == AppMode::Local)
+    state->logger.Info("Start path: " + payload.manifest.start_path);
   state->instance_guard =
       std::make_unique<SingleInstanceGuard>(EffectiveAppId(payload.manifest));
   if (payload.manifest.mode == AppMode::Local) {
     state->server = std::make_unique<ResourceServer>(payload, SecurityLimits{},
                                                      &state->logger);
-    navigation = Utf8ToWide(state->server->Start());
+    navigation = Utf8ToWide(
+        BuildLocalStartUrl(state->server->Start(), payload.manifest.start_path));
   } else {
     navigation = Utf8ToWide(payload.manifest.url);
   }

@@ -39,6 +39,7 @@ void ValidateManifest(const Manifest& manifest) {
     throw Error("Logging rotation configuration is outside the supported range");
   if (manifest.mode == AppMode::Local) {
     if (!NormalizeArchivePath(manifest.entry)) throw Error("Unsafe manifest entry path");
+    if (!IsSafeStartPath(manifest.start_path)) throw Error("Unsafe manifest start path");
   } else if (!IsSupportedHttpUrl(manifest.url)) {
     throw Error("URL mode requires an http:// or https:// URL");
   }
@@ -59,6 +60,7 @@ std::string SerializeManifest(const Manifest& manifest, bool pretty) {
       {"mode", manifest.mode == AppMode::Local ? "local" : "url"},
       {"app_id", manifest.app_id},
       {"entry", manifest.entry},
+      {"start_path", manifest.start_path},
       {"title", manifest.title},
       {"width", manifest.width},
       {"height", manifest.height},
@@ -86,6 +88,7 @@ Manifest ParseManifest(const std::string& json) {
     manifest.mode = mode == "url" ? AppMode::Url : AppMode::Local;
     manifest.app_id = value.value("app_id", "");
     manifest.entry = value.value("entry", "index.html");
+    manifest.start_path = value.value("start_path", "/");
     manifest.url = value.value("url", "");
     manifest.title = value.value("title", "lw.Web2App App");
     manifest.width = value.value("width", 1280u);

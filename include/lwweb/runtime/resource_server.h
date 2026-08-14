@@ -24,6 +24,7 @@ class Logger;
 // 端口位于 IANA dynamic/private 范围 49152-65535。
 std::uint16_t StableAppPort(const std::string& app_id);
 bool IsExpectedResourceHost(const std::string& host, std::uint16_t port);
+std::string BuildLocalStartUrl(const std::string& origin, const std::string& start_path);
 
 // 为嵌入 EXE 的 ZIP 建立中央目录索引，并按资源路径独立解压。
 // 构造阶段会执行条目数量、路径和解压尺寸等安全检查。

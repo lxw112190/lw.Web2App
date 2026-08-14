@@ -2,6 +2,7 @@
 #include "lwweb/packer/packer.h"
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
+#include "lwweb/common/path_utils.h"
 #include "lwweb/runtime/resource_server.h"
 
 #include <httplib.h>
@@ -145,7 +146,6 @@ void RunPayloadTests() {
   invalid_bounds.manifest_offset = 351;
   Check(BoundsRejected(invalid_bounds, 350 + lwweb::kPayloadFooterSize),
         "payload beyond footer rejected");
-
   const auto base = std::filesystem::temp_directory_path() / "lwweb-integration-test";
   std::error_code ignored;
   std::filesystem::remove_all(base, ignored);
@@ -173,6 +173,8 @@ void RunPayloadTests() {
     }
   }
   Check(port_blocker != nullptr, "test reserves a preferred resource port");
+  Check(lwweb::IsCanonicalArchivePath(pack.manifest.entry), "pack entry is canonical");
+  lwweb::ValidateManifest(pack.manifest);
   {
     std::ofstream previous(pack.output, std::ios::binary);
     previous << "previous application";
@@ -180,6 +182,7 @@ void RunPayloadTests() {
   lwweb::PackApplication(pack);
   const auto loaded = lwweb::LoadPayload(pack.output);
   Check(loaded.manifest.title == "Integration Test", "packed manifest loads");
+  Check(loaded.manifest.start_path == "/", "packed manifest stores default start path");
   Check(loaded.manifest.fullscreen, "new packages start fullscreen by default");
   Check(loaded.manifest.logging.enabled, "runtime logging enabled by default");
   Check(loaded.manifest.logging.max_file_size == 2ull * 1024 * 1024,
@@ -248,5 +251,6 @@ void RunPayloadTests() {
       R"({"format":"lw-web-app","version":1,"mode":"local","entry":"index.html","title":"Legacy"})");
   Check(!legacy.fullscreen, "legacy manifest remains windowed");
   Check(!legacy.logging.enabled, "legacy manifest does not unexpectedly enable logging");
+  Check(legacy.start_path == "/", "legacy manifest defaults to root start path");
   std::filesystem::remove_all(base, ignored);
 }

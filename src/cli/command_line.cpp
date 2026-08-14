@@ -77,6 +77,9 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
                   .generic_u8string();
     }
     options.manifest.entry = std::move(entry);
+    options.manifest.start_path = ArgumentValue(args, "--start-path");
+    if (options.manifest.start_path.empty())
+      options.manifest.start_path = SuggestedStartPath(options.manifest.entry);
   } else {
     options.manifest.url = args[2];
   }
@@ -108,6 +111,7 @@ std::string CommandLineHelp(CliPlatform platform) {
        << (platform == CliPlatform::Windows ? " (Windows)\n\n" : " (Linux)\n\n")
        << "  " << executable << " pack <directory> <" << application
        << "> [--entry index.html] [--title App]\n"
+       << "             [--start-path / | /login | /login.html]\n"
        << "             [--width 1280] [--height 800] [--app-id com.example.app]\n"
        << "             [--no-spa] [--windowed] [--no-log | --debug-log] [--devtools]\n"
        << "  " << executable << " pack-url <url> <" << application

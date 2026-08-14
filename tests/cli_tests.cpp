@@ -25,6 +25,18 @@ void RunCliTests() {
   Check(command.pack.manifest.logging.level == "debug", "debug logging parsed");
   Check(command.pack.manifest.devtools, "devtools option parsed");
 
+  const std::vector<std::string> local_args = {
+      "lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
+      "--start-path", "/login"};
+  const auto local_command = lwweb::ParseCommandLine(local_args, "runner.exe");
+  Check(local_command.pack.manifest.entry == "index.html", "local entry parsed");
+  Check(local_command.pack.manifest.start_path == "/login", "local start path parsed");
+  const auto suggested_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "pack", ".", "example.exe", "--entry", "pages/login.html"},
+      "runner.exe");
+  Check(suggested_command.pack.manifest.start_path == "/pages/login.html",
+        "start path is derived from an alternate entry");
+
   bool missing_value_rejected = false;
   try {
     (void)lwweb::ParseCommandLine(
@@ -51,4 +63,7 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Linux).find("--app-id") !=
             std::string::npos,
         "Linux help includes shared app ID option");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--start-path") !=
+            std::string::npos,
+        "help includes start path option");
 }
