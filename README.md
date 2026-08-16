@@ -76,7 +76,13 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 const apiBase = "/__lw_proxy__";
 ```
 
-于是 `/__lw_proxy__/sysUser/login` 由 C++ Runtime 转发为 `http://192.0.2.10:8080/sysUser/login`。页面看到的请求仍与 `127.0.0.1` 页面同源，因此不依赖 CORS、PNA 或 `--disable-web-security`。代理固定目标 Host、拒绝跨站来源与跨 Host 重定向，过滤 hop-by-hop/代理认证 Header，限制请求体为 16 MiB、响应体为 64 MiB，并把后端 Cookie 限定到代理前缀。为避免旧系统把 Token 放在 URL 路径或查询参数中造成泄露，代理日志不记录目标路径，只记录方法、状态和耗时，也不记录密码、Cookie、Authorization 或请求体。
+于是 `/__lw_proxy__/sysUser/login` 由 C++ Runtime 转发为 `http://192.0.2.10:8080/sysUser/login`。页面看到的请求仍与 `127.0.0.1` 页面同源，因此不依赖 CORS、PNA 或 `--disable-web-security`。代理固定目标 Host、拒绝跨站来源与跨 Host 重定向，过滤 hop-by-hop/代理认证 Header，限制请求体为 16 MiB、普通 API 响应体为 64 MiB，并把后端 Cookie 限定到代理前缀。为避免旧系统把 Token 放在 URL 路径或查询参数中造成泄露，代理日志不记录目标路径，只记录方法、状态和耗时，也不记录密码、Cookie、Authorization 或请求体。
+
+#### 代理下载
+
+当后台响应包含 `Content-Disposition: attachment` 时，代理自动进入下载流模式。数据通过约 1 MiB 的有界内存队列边接收边发送，生产速度超过 WebView 消费速度时会施加背压，不会把整个文件放进内存，也不受普通 API 的 64 MiB 响应上限限制。`Content-Disposition`、`Content-Type`、`Content-Length`、`Accept-Ranges`、`Content-Range`、`ETag` 和缓存头会按安全过滤规则传回；浏览器发出的 `Range` 会原样交给后台，因此支持后端提供的断点/分段下载。长度未知的响应使用分块传输，客户端取消或写盘失败时会立即取消上游读取。
+
+Windows WebView2 与 Linux WebKitGTK 都会显示系统“另存为”窗口，并保留后台通过 `filename`/`filename*` 给出的建议文件名；运行日志只记录下载开始、完成、中断或用户取消，不记录 URL、文件名和本地保存路径。前端应优先使用普通链接、表单提交或 `window.location` 访问 `/__lw_proxy__/...` 下载地址，让 WebView 接管下载；不建议先用 `fetch`/XHR 把大文件读成 Blob，因为那会在前端进程中再次缓存完整文件。后台应返回 `Content-Disposition: attachment`；没有该响应头的内容仍按普通 API 响应处理。
 
 当前版本只支持 `http://` 后台，适用于可信局域网老系统；`https://` 代理、WebSocket、NTLM/Kerberos 和多个后台 Origin 暂未支持。硬编码绝对后台地址的旧项目仍需将基地址改为 `/__lw_proxy__`，工具不会自动重写压缩后的 JavaScript。
 
@@ -373,14 +379,14 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 - 使用系统 WebKitGTK 4.1，不捆绑浏览器内核，因此安全更新与 Web API 兼容性跟随 Ubuntu 更新。
 - GTK 与 Win32 图形打包器都在后台线程压缩资源，界面在大型项目打包期间保持响应；取消操作和进度百分比属于后续改进。
 
-下一阶段优先增加生成应用的 desktop/图标/DEB 元数据、AppImage 可行性、外部链接与下载策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
+下一阶段优先增加生成应用的 desktop/图标/DEB 元数据、AppImage 可行性和外部链接策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
 
 其他后续方向：
 
 - 多分辨率图标生成
 - Authenticode 代码签名
 - 托盘、第二次启动时前置已有窗口和窗口置顶
-- 文件下载与外部链接策略
+- 外部链接策略
 - JS 与 C++ 双向 IPC
 - 自定义 User-Agent、启动参数和 CSP
 

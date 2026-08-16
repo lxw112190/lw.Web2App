@@ -88,6 +88,7 @@ std::string DefaultOutputPath() {
 // GTK/WebKitGTK 信号回调共享的轻量运行状态；对象生命周期覆盖整个 gtk_main 循环。
 struct RuntimeState {
   Logger* logger = nullptr;
+  GtkWidget* window = nullptr;
   bool fullscreen = false;
 };
 
@@ -141,6 +142,69 @@ void OnScriptMessage(WebKitUserContentManager*, WebKitJavascriptResult* result, 
   auto* text = jsc_value_to_string(value);
   state->logger->Error(std::string("[WEB-ERROR] ") + (text ? text : "unknown error"));
   g_free(text);
+}
+
+// 在下载真正写盘前交给用户选择目标位置；不把文件名和本地路径写入日志，
+// 避免旧系统把 Token 放进下载 URL 或文件名时造成信息泄露。
+gboolean OnDownloadDecideDestination(WebKitDownload* download,
+                                     const gchar* suggested_filename, gpointer data) {
+  auto* state = static_cast<RuntimeState*>(data);
+  auto* dialog = gtk_file_chooser_dialog_new(
+      "保存下载文件", GTK_WINDOW(state->window), GTK_FILE_CHOOSER_ACTION_SAVE,
+      "取消", GTK_RESPONSE_CANCEL, "保存", GTK_RESPONSE_ACCEPT, nullptr);
+  gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+  auto* basename = g_path_get_basename(
+      suggested_filename && *suggested_filename ? suggested_filename : "download");
+  gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), basename);
+  g_free(basename);
+
+  if (gtk_dialog_run(GTK_DIALOG(dialog)) != GTK_RESPONSE_ACCEPT) {
+    gtk_widget_destroy(dialog);
+    webkit_download_cancel(download);
+    state->logger->Info("Download canceled by user");
+    return TRUE;
+  }
+  auto* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+  gtk_widget_destroy(dialog);
+  GError* error = nullptr;
+  auto* destination = g_filename_to_uri(filename, nullptr, &error);
+  g_free(filename);
+  if (!destination) {
+    state->logger->Error(std::string("Cannot prepare download destination: ") +
+                         (error ? error->message : "unknown error"));
+    g_clear_error(&error);
+    webkit_download_cancel(download);
+    return TRUE;
+  }
+  webkit_download_set_allow_overwrite(download, TRUE);
+  webkit_download_set_destination(download, destination);
+  g_free(destination);
+  state->logger->Info("Download accepted by user");
+  return TRUE;
+}
+
+void OnDownloadFinished(WebKitDownload* download, gpointer data) {
+  if (!g_object_get_data(G_OBJECT(download), "lw-download-failed"))
+    static_cast<RuntimeState*>(data)->logger->Info("Download completed");
+}
+
+void OnDownloadFailed(WebKitDownload* download, GError* error, gpointer data) {
+  auto* state = static_cast<RuntimeState*>(data);
+  g_object_set_data(G_OBJECT(download), "lw-download-failed", GINT_TO_POINTER(1));
+  if (error && error->domain == WEBKIT_DOWNLOAD_ERROR &&
+      error->code == WEBKIT_DOWNLOAD_ERROR_CANCELLED_BY_USER)
+    return;
+  state->logger->Warn("Download interrupted, reason=" +
+                      std::to_string(error ? error->code : -1));
+}
+
+void OnDownloadStarted(WebKitWebContext*, WebKitDownload* download, gpointer data) {
+  auto* state = static_cast<RuntimeState*>(data);
+  state->logger->Info("Download started");
+  g_signal_connect(download, "decide-destination",
+                   G_CALLBACK(OnDownloadDecideDestination), state);
+  g_signal_connect(download, "finished", G_CALLBACK(OnDownloadFinished), state);
+  g_signal_connect(download, "failed", G_CALLBACK(OnDownloadFailed), state);
 }
 
 std::string FrontendErrorBridge() {
@@ -218,7 +282,7 @@ int RunPayloadApp(const LoadedPayload& payload) {
   gtk_window_set_resizable(GTK_WINDOW(window), payload.manifest.resizable);
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
-  RuntimeState state{&logger, payload.manifest.fullscreen};
+  RuntimeState state{&logger, window, payload.manifest.fullscreen};
   g_signal_connect(window, "destroy", G_CALLBACK(OnRuntimeDestroy), nullptr);
   g_signal_connect(window, "key-press-event", G_CALLBACK(OnRuntimeKey), &state);
   g_signal_connect(view, "load-changed", G_CALLBACK(OnLoadChanged), &state);
@@ -226,6 +290,7 @@ int RunPayloadApp(const LoadedPayload& payload) {
   g_signal_connect(view, "web-process-terminated", G_CALLBACK(OnWebProcessTerminated), &state);
   g_signal_connect(content, "script-message-received::lwWebError", G_CALLBACK(OnScriptMessage),
                    &state);
+  g_signal_connect(context, "download-started", G_CALLBACK(OnDownloadStarted), &state);
 
   logger.Info("WebKitGTK Runtime: " + std::to_string(webkit_get_major_version()) + "." +
               std::to_string(webkit_get_minor_version()) + "." +

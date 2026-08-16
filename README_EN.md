@@ -75,7 +75,13 @@ Select **HTTP backend proxy** and enter a fixed backend origin. This controlled 
 const apiBase = "/__lw_proxy__";
 ```
 
-The C++ Runtime forwards `/__lw_proxy__/sysUser/login` to `http://192.0.2.10:8080/sysUser/login`. To the page, the request remains same-origin with its `127.0.0.1` resource server, so it does not depend on CORS, PNA, or `--disable-web-security`. The proxy fixes the target Host, rejects cross-site callers and cross-host redirects, filters hop-by-hop and proxy-authentication headers, limits requests to 16 MiB and responses to 64 MiB, and scopes backend cookies to the proxy prefix. Because legacy systems may place tokens in either URL path parameters or query parameters, proxy logs omit the entire target path and contain only the method, status, and elapsed time; they never include bodies, passwords, cookies, or authorization credentials.
+The C++ Runtime forwards `/__lw_proxy__/sysUser/login` to `http://192.0.2.10:8080/sysUser/login`. To the page, the request remains same-origin with its `127.0.0.1` resource server, so it does not depend on CORS, PNA, or `--disable-web-security`. The proxy fixes the target Host, rejects cross-site callers and cross-host redirects, filters hop-by-hop and proxy-authentication headers, limits requests to 16 MiB and ordinary API responses to 64 MiB, and scopes backend cookies to the proxy prefix. Because legacy systems may place tokens in either URL path parameters or query parameters, proxy logs omit the entire target path and contain only the method, status, and elapsed time; they never include bodies, passwords, cookies, or authorization credentials.
+
+#### Proxied Downloads
+
+When the backend responds with `Content-Disposition: attachment`, the proxy automatically switches to streaming-download mode. A bounded queue of about 1 MiB forwards data as it arrives and applies backpressure when the WebView consumes it more slowly. The complete file is never buffered in memory, and the ordinary 64 MiB API-response limit does not apply. `Content-Disposition`, `Content-Type`, `Content-Length`, `Accept-Ranges`, `Content-Range`, `ETag`, and cache headers are preserved after security filtering. Browser `Range` requests are forwarded unchanged, so partial downloads work when supported by the backend. Responses without a known length use chunked transfer, and client cancellation or a write failure immediately cancels the upstream read.
+
+Both Windows WebView2 and Linux WebKitGTK show a native **Save As** dialog and retain the filename suggested through `filename` or `filename*`. Runtime logs record only download start, completion, interruption, or user cancellation; URLs, filenames, and local paths are omitted. Frontends should use a normal link, form submission, or `window.location` to open a `/__lw_proxy__/...` download URL and let the WebView own the transfer. Avoid fetching a large file into a Blob through `fetch` or XHR, because that buffers it again in the web process. The backend should emit `Content-Disposition: attachment`; responses without it remain ordinary buffered API responses.
 
 This release supports `http://` backends only and is intended for trusted legacy LAN systems. HTTPS proxying, WebSocket, NTLM/Kerberos, and multiple backend origins are not yet supported. Projects with hard-coded absolute API URLs must still change their base URL to `/__lw_proxy__`; lw.Web2App does not rewrite minified JavaScript automatically.
 
@@ -366,14 +372,14 @@ Explicit Linux Beta boundaries:
 - Rendering uses the system WebKitGTK 4.1. Browser security updates and Web API behavior therefore follow Ubuntu updates.
 - Both GTK and Win32 package resources on a worker thread so the GUI remains responsive for large projects. Cancellation and percentage progress remain future work.
 
-Next priorities are generated-app desktop/icon/DEB metadata, AppImage evaluation, external-link and download policies, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
+Next priorities are generated-app desktop/icon/DEB metadata, AppImage evaluation, and an external-link policy, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
 
 Other planned improvements:
 
 - Multi-resolution icon generation
 - Authenticode code signing
 - Tray support, activating the existing window on a second launch, and always-on-top windows
-- File download and external-link policies
+- External-link policy
 - JavaScript/C++ IPC
 - Custom user agents, startup arguments, and CSP
 

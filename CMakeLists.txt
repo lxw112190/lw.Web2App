@@ -113,6 +113,7 @@ add_library(lwweb_core STATIC
   src/packer/packer.cpp
   src/runtime/resource_cache.cpp
   src/runtime/backend_proxy.cpp
+  src/runtime/proxy_stream.cpp
   src/runtime/single_instance.cpp
   src/runtime/resource_server.cpp)
 target_include_directories(lwweb_core PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated")

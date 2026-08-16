@@ -193,6 +193,8 @@ void RunPayloadTests() {
   std::string backend_target;
   std::string backend_body;
   std::string backend_origin_header;
+  std::string backend_range_header;
+  const std::string download_data(2 * 1024 * 1024, 'D');
   BackendServerGuard backend;
   Check(backend.Bind([&](httplib::Server& server) {
           server.Post("/sysUser/login", [&](const httplib::Request& request,
@@ -210,11 +212,31 @@ void RunPayloadTests() {
                                                 httplib::Response& response) {
             response.set_redirect("http://example.com/escape");
           });
+          server.Get("/downloads/report", [&](const httplib::Request& request,
+                                                httplib::Response& response) {
+            backend_range_header = request.get_header_value("Range");
+            response.set_header(
+                "Content-Disposition",
+                "attachment; filename*=UTF-8''proxy-download-%E6%B5%8B%E8%AF%95.bin");
+            response.set_header("Accept-Ranges", "bytes");
+            response.set_header("Cache-Control", "no-store");
+            response.set_content_provider(
+                download_data.size(), "application/octet-stream",
+                [&](std::size_t offset, std::size_t length,
+                    httplib::DataSink& sink) {
+                  return sink.write(download_data.data() + offset, length);
+                });
+          });
+          server.Get("/oversized-api", [](const httplib::Request&,
+                                            httplib::Response& response) {
+            response.set_content(std::string(2048, 'J'), "application/json");
+          });
         }),
         "mock legacy backend starts");
   pack.manifest.backend_proxy.enabled = true;
   pack.manifest.backend_proxy.origin =
       "http://127.0.0.1:" + std::to_string(backend.port);
+  pack.manifest.backend_proxy.max_response_size = 1024;
   std::unique_ptr<ListeningServerGuard> port_blocker;
   for (int attempt = 0; attempt < 32 && !port_blocker; ++attempt) {
     const auto app_id = "test-port-" + unique + "-" + std::to_string(attempt);
@@ -289,6 +311,32 @@ void RunPayloadTests() {
     const auto redirect = application.Get("/__lw_proxy__/external-redirect", page_headers);
     Check(redirect && redirect->status == 502,
           "cross-origin backend redirect is rejected");
+    const auto oversized = application.Get("/__lw_proxy__/oversized-api", page_headers);
+    Check(oversized && oversized->status == 502,
+          "oversized non-download response remains bounded");
+    const auto download = application.Get("/__lw_proxy__/downloads/report", page_headers);
+    Check(download && download->status == 200 && download->body == download_data,
+          "attachment response streams beyond the buffered API limit");
+    const auto download_disposition =
+        download->get_header_value("Content-Disposition");
+    Check(download_disposition ==
+              "attachment; filename*=UTF-8''proxy-download-测试.bin",
+          "download content disposition and UTF-8 filename are preserved");
+    Check(download->get_header_value("Content-Length") ==
+              std::to_string(download_data.size()),
+          "download content length is preserved");
+    httplib::Headers range_headers = page_headers;
+    range_headers.emplace("Range", "bytes=1024-2047");
+    const auto partial =
+        application.Get("/__lw_proxy__/downloads/report", range_headers);
+    Check(partial && partial->status == 206 && partial->body.size() == 1024 &&
+              partial->body == download_data.substr(1024, 1024),
+          "download byte range is forwarded without local double slicing");
+    Check(backend_range_header == "bytes=1024-2047",
+          "download Range header reaches the backend");
+    Check(partial->get_header_value("Content-Range") ==
+              "bytes 1024-2047/" + std::to_string(download_data.size()),
+          "download Content-Range is preserved");
     fallback_server.Stop();
   }
   lwweb::ZipResourceStore store(loaded);

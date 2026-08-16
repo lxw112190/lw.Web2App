@@ -6,9 +6,11 @@
 #include "lwweb/common/sha256.h"
 
 #include <ShlObj.h>
+#include <ShObjIdl.h>
 
 #include <filesystem>
 #include <iterator>
+#include <optional>
 
 using Microsoft::WRL::Callback;
 
@@ -35,6 +37,52 @@ std::wstring UserDataFolder(const Manifest& manifest) {
   std::filesystem::create_directories(folder, error);
   if (error) throw Error("Cannot create the WebView2 user data directory");
   return folder.wstring();
+}
+
+// 使用 Windows Shell 的系统“另存为”窗口选择下载目标，保留 WebView2
+// 从 Content-Disposition 推导出的文件名，并支持长路径与 Unicode。
+std::optional<std::wstring> ChooseDownloadPath(HWND owner,
+                                               const std::wstring& suggested_path,
+                                               bool& dialog_available) {
+  dialog_available = false;
+  Microsoft::WRL::ComPtr<IFileSaveDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileSaveDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog))))
+    return std::nullopt;
+  dialog_available = true;
+
+  FILEOPENDIALOGOPTIONS options{};
+  if (SUCCEEDED(dialog->GetOptions(&options)))
+    dialog->SetOptions(options | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST |
+                       FOS_OVERWRITEPROMPT | FOS_NOCHANGEDIR);
+  dialog->SetTitle(L"保存下载文件");
+
+  const std::filesystem::path suggested(suggested_path);
+  auto filename = suggested.filename().wstring();
+  if (filename.empty()) filename = L"download";
+  dialog->SetFileName(filename.c_str());
+  const auto parent = suggested.parent_path();
+  if (!parent.empty()) {
+    Microsoft::WRL::ComPtr<IShellItem> folder;
+    if (SUCCEEDED(SHCreateItemFromParsingName(parent.c_str(), nullptr,
+                                               IID_PPV_ARGS(&folder))))
+      dialog->SetDefaultFolder(folder.Get());
+  }
+
+  const auto shown = dialog->Show(owner);
+  if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return std::nullopt;
+  if (FAILED(shown)) {
+    dialog_available = false;
+    return std::nullopt;
+  }
+  Microsoft::WRL::ComPtr<IShellItem> result;
+  if (FAILED(dialog->GetResult(&result))) return std::nullopt;
+  PWSTR path = nullptr;
+  if (FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path)
+    return std::nullopt;
+  std::wstring selected(path);
+  CoTaskMemFree(path);
+  return selected;
 }
 
 }  // namespace
@@ -106,6 +154,86 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                        .Get(),
                                    &accelerator_token);
                                controller_->get_CoreWebView2(&webview_);
+                               Microsoft::WRL::ComPtr<ICoreWebView2_4> webview4;
+                               if (SUCCEEDED(webview_.As(&webview4))) {
+                                 EventRegistrationToken download_token{};
+                                 webview4->add_DownloadStarting(
+                                     Callback<ICoreWebView2DownloadStartingEventHandler>(
+                                         [this](ICoreWebView2*,
+                                                ICoreWebView2DownloadStartingEventArgs* args)
+                                             -> HRESULT {
+                                           LPWSTR proposed = nullptr;
+                                           std::wstring suggested;
+                                           if (SUCCEEDED(args->get_ResultFilePath(&proposed)) &&
+                                               proposed) {
+                                             suggested = proposed;
+                                             CoTaskMemFree(proposed);
+                                           }
+                                           bool dialog_available = false;
+                                           const auto selected = ChooseDownloadPath(
+                                               window_, suggested, dialog_available);
+                                           if (selected) {
+                                             args->put_ResultFilePath(selected->c_str());
+                                             args->put_Handled(TRUE);
+                                             if (logger_)
+                                               logger_->Info("Download accepted by user");
+                                           } else if (dialog_available) {
+                                             args->put_Cancel(TRUE);
+                                             args->put_Handled(TRUE);
+                                             if (logger_)
+                                               logger_->Info("Download canceled by user");
+                                             return S_OK;
+                                           } else if (logger_) {
+                                             logger_->Warn(
+                                                 "System save dialog unavailable; using "
+                                                 "WebView2 download UI");
+                                           }
+
+                                           Microsoft::WRL::ComPtr<
+                                               ICoreWebView2DownloadOperation>
+                                               operation;
+                                           if (SUCCEEDED(args->get_DownloadOperation(
+                                                   &operation)) &&
+                                               operation) {
+                                             EventRegistrationToken state_token{};
+                                             operation->add_StateChanged(
+                                                 Callback<
+                                                     ICoreWebView2StateChangedEventHandler>(
+                                                     [this](
+                                                         ICoreWebView2DownloadOperation* sender,
+                                                         IUnknown*) -> HRESULT {
+                                                       COREWEBVIEW2_DOWNLOAD_STATE state{};
+                                                       if (FAILED(sender->get_State(&state)))
+                                                         return S_OK;
+                                                       if (state ==
+                                                           COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED) {
+                                                         if (logger_)
+                                                           logger_->Info(
+                                                               "Download completed");
+                                                       } else if (
+                                                           state ==
+                                                           COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED) {
+                                                         COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON
+                                                         reason{};
+                                                         sender->get_InterruptReason(&reason);
+                                                         if (logger_)
+                                                           logger_->Warn(
+                                                               "Download interrupted, reason=" +
+                                                               std::to_string(reason));
+                                                       }
+                                                       return S_OK;
+                                                     })
+                                                     .Get(),
+                                                 &state_token);
+                                           }
+                                           return S_OK;
+                                         })
+                                         .Get(),
+                                     &download_token);
+                               } else if (logger_) {
+                                 logger_->Warn(
+                                     "WebView2 download event API unavailable; using default UI");
+                               }
                                EventRegistrationToken navigation_token{};
                                webview_->add_NavigationCompleted(
                                    Callback<ICoreWebView2NavigationCompletedEventHandler>(
