@@ -174,7 +174,9 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                                window_, suggested, dialog_available);
                                            if (selected) {
                                              args->put_ResultFilePath(selected->c_str());
-                                             args->put_Handled(TRUE);
+                                             // 保留 WebView2 默认下载 UI，
+                                             // 这样用户可以看到下载进度和完成状态。
+                                             args->put_Handled(FALSE);
                                              if (logger_)
                                                logger_->Info("Download accepted by user");
                                            } else if (dialog_available) {
