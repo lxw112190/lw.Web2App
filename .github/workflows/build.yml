@@ -68,6 +68,8 @@ jobs:
             -ArgumentList @(
               'pack', $source, $output,
               '--title', '公众号排版助手',
+              '--product-name', '公众号排版助手',
+              '--file-description', '微信公众号文章排版桌面工具',
               '--width', '1440', '--height', '900',
               '--company', '天天代码码天天',
               '--version', $peVersion,
@@ -75,6 +77,20 @@ jobs:
             )
           if ($pack.ExitCode -ne 0 -or -not (Test-Path $output)) {
             throw "Integration test packaging failed with exit code $($pack.ExitCode)"
+          }
+          $versionInfo = (Get-Item $output).VersionInfo
+          $expected = @{
+            ProductName = '公众号排版助手'
+            FileDescription = '微信公众号文章排版桌面工具'
+            CompanyName = '天天代码码天天'
+            FileVersion = $peVersion
+            ProductVersion = $peVersion
+            LegalCopyright = 'Copyright © 2026 天天代码码天天'
+          }
+          foreach ($field in $expected.Keys) {
+            if ($versionInfo.$field -ne $expected[$field]) {
+              throw "PE metadata mismatch for ${field}: '$($versionInfo.$field)'"
+            }
           }
           $inspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
             -ArgumentList @('inspect', $output)

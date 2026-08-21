@@ -5,6 +5,8 @@ project(lw.Web2App VERSION 0.2.1 LANGUAGES C CXX)
 configure_file(resources/version.h.in generated/lwweb/version.h @ONLY)
 if(WIN32)
   configure_file(resources/lwweb.rc.in generated/lwweb.rc @ONLY)
+  set(LWWEB_SPONSOR_RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/docs/assets/sponsor.jpg")
+  configure_file(resources/gui_resources.rc.in generated/gui_resources.rc @ONLY)
 endif()
 
 if(POLICY CMP0135)
@@ -106,6 +108,7 @@ add_library(lwweb_core STATIC
   src/common/file_utils.cpp
   src/common/http_origin.cpp
   src/common/logging.cpp
+  src/common/pe_version.cpp
   src/common/path_utils.cpp
   src/common/sha256.cpp
   src/packer/manifest.cpp
@@ -131,7 +134,8 @@ if(WIN32)
     SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)
   add_executable(lwweb WIN32
     src/app/main.cpp src/app/main_window.cpp src/webview/webview_host.cpp
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/lwweb.rc")
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/lwweb.rc"
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/gui_resources.rc")
   target_include_directories(lwweb PRIVATE include ${WEBVIEW2_INCLUDE})
   target_link_libraries(lwweb PRIVATE lwweb_core "${WEBVIEW2_LOADER}" comctl32 comdlg32
     dwmapi ole32 shell32 shlwapi uxtheme windowscodecs user32 gdi32)

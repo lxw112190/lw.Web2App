@@ -12,6 +12,10 @@ Windows graphical packager:
 
 <img src="docs/assets/lw.Web2App.png" alt="lw.Web2App graphical packager on Windows" width="760">
 
+The Windows GUI uses a two-column layout. The left side selects a local build or URL, entry page, start path, and controlled backend proxy. The right side configures the window title, PE ProductName, FileDescription, company, version, copyright, live icon preview, dimensions, and runtime options. The title continues to synchronize into ProductName and FileDescription until either field is edited manually. Output and progress share a full-width bottom area, while resource compression remains on a worker thread so large projects do not freeze the UI. After a successful package, File Explorer opens automatically with the generated EXE selected.
+
+Versions may contain one to four numeric components and are normalized to `a.b.c.d`; every component must be within `0..65535`. PNG and ICO files are previewed immediately and validated before packaging. The sponsor QR image is embedded in the GUI executable and does not depend on a sidecar file.
+
 Linux graphical packager (Ubuntu 22.04):
 
 <img src="docs/assets/lw.Web2App-linux.png" alt="lw.Web2App graphical packager on Linux" width="760">
@@ -242,6 +246,8 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --entry index.html `
   --start-path /login `
   --title "My App" `
+  --product-name "My App" `
+  --file-description "My App desktop client" `
   --app-id com.example.myapp `
   --width 1280 `
   --height 800 `
@@ -287,8 +293,10 @@ Additional options:
 - `--debug-log`: enable DEBUG runtime logs for resource requests, ZIP cache activity, and SPA fallback.
 - `--devtools`: enable developer tools and the default context menu.
 - `--app-id`: explicitly set the stable application ID; Windows and Linux share the same parser.
+- `--product-name`: write the Windows PE ProductName; defaults to `--title`.
+- `--file-description`: write the Windows PE FileDescription; defaults to `--title`.
 - `--company`: write the company name.
-- `--version`: write file and product versions.
+- `--version`: write file and product versions; one to four numeric components are padded to four.
 - `--copyright`: write copyright metadata.
 
 A generated EXE can also execute CLI packaging commands. Only its original Runner prefix is copied, so old payloads are never nested.

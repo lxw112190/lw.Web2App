@@ -3,6 +3,7 @@
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/path_utils.h"
+#include "lwweb/common/pe_version.h"
 #include "lwweb/packer/payload.h"
 #include "lwweb/version.h"
 
@@ -96,11 +97,14 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
   options.manifest.logging.enabled = !HasArgument(args, "--no-log");
   options.manifest.logging.level = HasArgument(args, "--debug-log") ? "debug" : "info";
 
-  options.metadata.product_name = Utf8ToWide(options.manifest.title);
-  options.metadata.file_description = options.metadata.product_name;
+  options.metadata.product_name =
+      Utf8ToWide(ArgumentValue(args, "--product-name", options.manifest.title));
+  options.metadata.file_description =
+      Utf8ToWide(ArgumentValue(args, "--file-description", options.manifest.title));
   options.metadata.icon = std::filesystem::u8path(ArgumentValue(args, "--icon"));
   options.metadata.company_name = Utf8ToWide(ArgumentValue(args, "--company"));
-  options.metadata.version = Utf8ToWide(ArgumentValue(args, "--version", "1.0.0.0"));
+  options.metadata.version =
+      NormalizePeVersion(Utf8ToWide(ArgumentValue(args, "--version", "1.0.0.0")));
   options.metadata.copyright = Utf8ToWide(ArgumentValue(args, "--copyright"));
   return command;
 }
@@ -117,8 +121,12 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "             [--width 1280] [--height 800] [--app-id com.example.app]\n"
        << "             [--no-spa] [--windowed] [--no-log | --debug-log] [--devtools]\n"
        << "             [--backend-origin http://host:port]\n"
+       << "             [--product-name App] [--file-description Description]\n"
+       << "             [--icon app.png] [--company Company] [--version 1.0.0.0]\n"
+       << "             [--copyright Copyright]\n"
        << "  " << executable << " pack-url <url> <" << application
-       << "> [--title App] [--app-id com.example.app] [--windowed]\n"
+       << "> [--title App] [--product-name App] [--file-description Description]\n"
+       << "             [--app-id com.example.app] [--windowed]\n"
        << "  " << executable << " inspect <application>\n";
   return help.str();
 }

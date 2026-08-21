@@ -2,6 +2,7 @@
 
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
+#include "lwweb/common/pe_version.h"
 
 #include <Windows.h>
 #include <wincodec.h>
@@ -9,7 +10,6 @@
 
 #include <algorithm>
 #include <array>
-#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -117,26 +117,6 @@ void PatchWord(std::vector<std::uint8_t>& out, std::size_t at, std::uint16_t val
   out.at(at + 1) = static_cast<std::uint8_t>(value >> 8);
 }
 
-std::array<std::uint16_t, 4> ParseVersion(const std::wstring& text) {
-  std::array<std::uint16_t, 4> value{};
-  std::size_t start = 0;
-  for (std::size_t i = 0; i < value.size(); ++i) {
-    const auto end = text.find(L'.', start);
-    const auto part = text.substr(start, end == std::wstring::npos ? end : end - start);
-    if (part.empty()) throw Error("Version must look like 1.2.3.4");
-    unsigned parsed = 0;
-    for (wchar_t c : part) {
-      if (c < L'0' || c > L'9') throw Error("Version must contain only numbers and dots");
-      parsed = parsed * 10 + (c - L'0');
-      if (parsed > 65535) throw Error("A version component exceeds 65535");
-    }
-    value[i] = static_cast<std::uint16_t>(parsed);
-    if (end == std::wstring::npos) break;
-    start = end + 1;
-  }
-  return value;
-}
-
 std::size_t BeginBlock(std::vector<std::uint8_t>& out, const std::wstring& key,
                        std::uint16_t value_length, std::uint16_t type) {
   const auto start = out.size();
@@ -154,7 +134,10 @@ void EndBlock(std::vector<std::uint8_t>& out, std::size_t start) {
 }
 
 std::vector<std::uint8_t> BuildVersionResource(const PeMetadata& metadata) {
-  const auto version = ParseVersion(metadata.version);
+  const auto version = ParsePeVersion(metadata.version);
+  const auto normalized_version =
+      std::to_wstring(version[0]) + L"." + std::to_wstring(version[1]) + L"." +
+      std::to_wstring(version[2]) + L"." + std::to_wstring(version[3]);
   std::vector<std::uint8_t> out;
   const auto root = BeginBlock(out, L"VS_VERSION_INFO", sizeof(VS_FIXEDFILEINFO), 0);
   VS_FIXEDFILEINFO fixed{};
@@ -176,10 +159,10 @@ std::vector<std::uint8_t> BuildVersionResource(const PeMetadata& metadata) {
   const std::array<std::pair<std::wstring, std::wstring>, 7> values = {{
       {L"CompanyName", metadata.company_name},
       {L"FileDescription", metadata.file_description},
-      {L"FileVersion", metadata.version},
+      {L"FileVersion", normalized_version},
       {L"LegalCopyright", metadata.copyright},
       {L"ProductName", metadata.product_name},
-      {L"ProductVersion", metadata.version},
+      {L"ProductVersion", normalized_version},
       {L"OriginalFilename", L"application.exe"}}};
   for (const auto& [key, value] : values) {
     const auto block = BeginBlock(out, key, static_cast<std::uint16_t>(value.size() + 1), 1);
@@ -274,7 +257,8 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
 void ApplyPeResources(const std::filesystem::path& executable,
                       const PeMetadata& metadata) {
   ResourceUpdate update(executable);
-  if (!metadata.product_name.empty() || !metadata.file_description.empty()) {
+  if (!metadata.product_name.empty() || !metadata.company_name.empty() ||
+      !metadata.file_description.empty() || !metadata.copyright.empty()) {
     auto version = BuildVersionResource(metadata);
     if (!UpdateResourceW(update.get(), MAKEINTRESOURCEW(16), MAKEINTRESOURCEW(1),
                          MAKELANGID(LANG_ENGLISH, SUBLANG_ENGLISH_US), version.data(),

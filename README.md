@@ -12,6 +12,10 @@ Windows 图形打包器：
 
 <img src="docs/assets/lw.Web2App.png" alt="lw.Web2App Windows 图形打包器" width="760">
 
+Windows GUI 采用双栏布局：左侧选择本地网页或在线网址、启动页、启动路径与受控后台代理；右侧设置应用名称、PE 产品名、文件说明、公司、版本、版权、图标预览、窗口尺寸及运行选项。应用名称会自动同步到产品名和文件说明，用户手动修改对应字段后不再覆盖。底部统一设置输出位置并显示打包进度；大型项目的压缩工作在后台线程完成，界面保持响应。生成成功后会自动打开资源管理器并选中目标 EXE。
+
+版本号允许输入 1 至 4 段数字并自动补齐为 `a.b.c.d`，每段范围为 `0..65535`。自定义图标支持 PNG/ICO，选择后会立即预览并在生成前校验。界面中的赞助二维码已内嵌到 EXE，不依赖外部图片文件。
+
 Linux 图形打包器（Ubuntu 22.04）：
 
 <img src="docs/assets/lw.Web2App-linux.png" alt="lw.Web2App Linux 图形打包器" width="760">
@@ -249,6 +253,8 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --entry index.html `
   --start-path /login `
   --title "我的应用" `
+  --product-name "我的应用" `
+  --file-description "我的应用桌面客户端" `
   --app-id com.example.myapp `
   --width 1280 `
   --height 800 `
@@ -294,8 +300,10 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--debug-log`：将运行日志级别设为 DEBUG，记录资源请求、ZIP 缓存和 SPA fallback。
 - `--devtools`：允许打开开发者工具和默认右键菜单。
 - `--app-id`：显式指定跨重启稳定的应用 ID；Windows 和 Linux 使用同一参数解析规则。
+- `--product-name`：写入 Windows EXE 属性中的产品名称；省略时继承 `--title`。
+- `--file-description`：写入 Windows EXE 属性中的文件说明；省略时继承 `--title`。
 - `--company`：写入公司名称。
-- `--version`：写入文件和产品版本。
+- `--version`：写入文件和产品版本；支持 1 至 4 段数字并补齐为四段式。
 - `--copyright`：写入版权信息。
 
 已经生成的 EXE 也可继续执行 CLI 打包命令。程序只会复制原始 Runner 前缀，不会嵌套旧 Payload。

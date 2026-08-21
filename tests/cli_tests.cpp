@@ -1,4 +1,5 @@
 #include "lwweb/cli/command_line.h"
+#include "lwweb/common/pe_version.h"
 
 #include <stdexcept>
 #include <string>
@@ -24,6 +25,27 @@ void RunCliTests() {
   Check(!command.pack.manifest.fullscreen, "windowed option parsed");
   Check(command.pack.manifest.logging.level == "debug", "debug logging parsed");
   Check(command.pack.manifest.devtools, "devtools option parsed");
+  Check(command.pack.metadata.product_name == L"Example",
+        "product name defaults to title");
+  Check(command.pack.metadata.file_description == L"Example",
+        "file description defaults to title");
+
+  const auto metadata_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "pack-url", "https://example.com", "example.exe",
+       "--title", "Window title", "--product-name", "Product name",
+       "--file-description", "File description", "--company", "Company",
+       "--version", "2.3", "--copyright", "Copyright 2026"},
+      "runner.exe");
+  Check(metadata_command.pack.metadata.product_name == L"Product name",
+        "explicit product name parsed");
+  Check(metadata_command.pack.metadata.file_description == L"File description",
+        "explicit file description parsed");
+  Check(metadata_command.pack.metadata.company_name == L"Company",
+        "company parsed");
+  Check(metadata_command.pack.metadata.version == L"2.3.0.0",
+        "PE version normalized");
+  Check(metadata_command.pack.metadata.copyright == L"Copyright 2026",
+        "copyright parsed");
 
   const auto proxy_command = lwweb::ParseCommandLine(
       {"lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
@@ -79,4 +101,23 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--backend-origin") !=
             std::string::npos,
         "help includes controlled backend proxy option");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--product-name") !=
+            std::string::npos,
+        "help includes PE product name option");
+  Check(lwweb::NormalizePeVersion(L"1.2.3") == L"1.2.3.0",
+        "PE version helper pads missing components");
+  bool invalid_version_rejected = false;
+  try {
+    (void)lwweb::NormalizePeVersion(L"1.2.3.4.5");
+  } catch (...) {
+    invalid_version_rejected = true;
+  }
+  Check(invalid_version_rejected, "PE version rejects more than four components");
+  bool overflowing_version_rejected = false;
+  try {
+    (void)lwweb::NormalizePeVersion(L"4294967296");
+  } catch (...) {
+    overflowing_version_rejected = true;
+  }
+  Check(overflowing_version_rejected, "PE version rejects overflowing components");
 }
