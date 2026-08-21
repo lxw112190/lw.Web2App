@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <system_error>
@@ -184,6 +185,61 @@ std::vector<std::uint8_t> BuildVersionResource(const PeMetadata& metadata) {
   return out;
 }
 
+// 将大尺寸 PNG 等比缩小后重新编码。ICO 目录的宽高字段最多只能表达 256，
+// 但设计软件通常导出 512 或 1024 像素图标，因此在写入 PE 前自动适配。
+std::vector<std::uint8_t> ResizePngForIcon(IWICImagingFactory* factory,
+                                           IWICBitmapFrameDecode* frame,
+                                           UINT source_width, UINT source_height,
+                                           UINT& output_width, UINT& output_height) {
+  constexpr UINT kMaximumIconDimension = 256;
+  const auto scale = std::min(
+      static_cast<double>(kMaximumIconDimension) / source_width,
+      static_cast<double>(kMaximumIconDimension) / source_height);
+  output_width = std::max<UINT>(1, static_cast<UINT>(std::lround(source_width * scale)));
+  output_height = std::max<UINT>(1, static_cast<UINT>(std::lround(source_height * scale)));
+
+  Microsoft::WRL::ComPtr<IWICBitmapScaler> scaler;
+  if (FAILED(factory->CreateBitmapScaler(&scaler)) ||
+      FAILED(scaler->Initialize(frame, output_width, output_height,
+                                WICBitmapInterpolationModeFant)))
+    throw Error("Cannot resize PNG icon");
+
+  Microsoft::WRL::ComPtr<IStream> stream;
+  if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream)))
+    throw Error("Cannot create PNG icon stream");
+  Microsoft::WRL::ComPtr<IWICBitmapEncoder> encoder;
+  if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
+      FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)))
+    throw Error("Cannot initialize PNG icon encoder");
+
+  Microsoft::WRL::ComPtr<IWICBitmapFrameEncode> encoded_frame;
+  Microsoft::WRL::ComPtr<IPropertyBag2> properties;
+  if (FAILED(encoder->CreateNewFrame(&encoded_frame, &properties)) ||
+      FAILED(encoded_frame->Initialize(properties.Get())) ||
+      FAILED(encoded_frame->SetSize(output_width, output_height)))
+    throw Error("Cannot initialize resized PNG icon frame");
+  WICPixelFormatGUID pixel_format = GUID_WICPixelFormat32bppBGRA;
+  if (FAILED(encoded_frame->SetPixelFormat(&pixel_format)) ||
+      FAILED(encoded_frame->WriteSource(scaler.Get(), nullptr)) ||
+      FAILED(encoded_frame->Commit()) || FAILED(encoder->Commit()))
+    throw Error("Cannot encode resized PNG icon");
+
+  STATSTG statistics{};
+  if (FAILED(stream->Stat(&statistics, STATFLAG_NONAME)) ||
+      statistics.cbSize.QuadPart == 0 ||
+      statistics.cbSize.QuadPart > static_cast<ULONGLONG>(MAXDWORD))
+    throw Error("Resized PNG icon has an invalid size");
+  HGLOBAL storage = nullptr;
+  if (FAILED(GetHGlobalFromStream(stream.Get(), &storage)) || !storage)
+    throw Error("Cannot read resized PNG icon");
+  const auto* data = static_cast<const std::uint8_t*>(GlobalLock(storage));
+  if (!data) throw Error("Cannot lock resized PNG icon");
+  const auto size = static_cast<std::size_t>(statistics.cbSize.QuadPart);
+  std::vector<std::uint8_t> bytes(data, data + size);
+  GlobalUnlock(storage);
+  return bytes;
+}
+
 void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
   if (path.empty()) return;
   auto extension = path.extension().wstring();
@@ -201,9 +257,14 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
     Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
     UINT width = 0, height = 0;
     if (FAILED(decoder->GetFrame(0, &frame)) || FAILED(frame->GetSize(&width, &height)) ||
-        width == 0 || height == 0 || width > 256 || height > 256)
-      throw Error("PNG icon dimensions must be between 1 and 256 pixels");
-    const auto bytes = ReadFileBytes(path);
+        width == 0 || height == 0)
+      throw Error("PNG icon dimensions are invalid");
+    // 限制异常图片，避免解码超大 PNG 时占用过多内存；常见的 512/1024/2048 图标均支持。
+    if (width > 8192 || height > 8192)
+      throw Error("PNG icon dimensions must not exceed 8192 pixels");
+    auto bytes = ReadFileBytes(path);
+    if (width > 256 || height > 256)
+      bytes = ResizePngForIcon(factory.Get(), frame.Get(), width, height, width, height);
     if (!UpdateResourceW(update, MAKEINTRESOURCEW(3), MAKEINTRESOURCEW(1),
                          MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
                          const_cast<std::uint8_t*>(bytes.data()),

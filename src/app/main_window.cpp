@@ -33,7 +33,7 @@ namespace {
 
 constexpr wchar_t kClassName[] = L"lw.Web2App.Packer";
 constexpr int kClientWidth = 1120;
-constexpr int kClientHeight = 680;
+constexpr int kClientHeight = 668;
 constexpr int kSponsorResourceId = 201;
 constexpr COLORREF kBackground = RGB(244, 247, 252);
 constexpr COLORREF kCard = RGB(255, 255, 255);
@@ -63,6 +63,7 @@ enum ControlId {
   kCopyright,
   kIcon,
   kBrowseIcon,
+  kDefaultIcon,
   kWidth,
   kHeight,
   kFullscreen,
@@ -108,11 +109,11 @@ struct State {
   HICON default_icon = nullptr;
   RECT left_card{28, 96, 526, 542};
   RECT right_card{538, 96, 1092, 542};
-  RECT output_card{28, 550, 1092, 668};
+  RECT output_card{28, 550, 1092, 640};
   RECT icon_preview_rect{656, 374, 724, 442};
   RECT sponsor_rect{48, 421, 150, 523};
   RECT sponsor_divider{48, 392, 506, 393};
-  RECT status_rect{48, 635, 824, 657};
+  RECT status_rect{48, 611, 824, 632};
   std::wstring status = L"准备就绪 · 请选择网页目录和输出位置";
   COLORREF status_color = kSuccess;
   COLORREF icon_hint_color = kMuted;
@@ -529,7 +530,7 @@ void RevealOutputInExplorer(const std::filesystem::path& output) {
 void RefreshIconPreview(State& state) {
   const auto icon_text = Trim(Text(state.window, kIcon));
   HBITMAP replacement = nullptr;
-  std::wstring hint = L"未选择自定义图标 · 使用 Windows 默认图标";
+  std::wstring hint = L"使用 Windows 默认图标";
   COLORREF hint_color = kMuted;
   if (!icon_text.empty()) {
     try {
@@ -540,7 +541,7 @@ void RefreshIconPreview(State& state) {
                      [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
       if (extension != L".png" && extension != L".ico") throw Error("Icon must be PNG or ICO");
       replacement = CreateIconPreviewBitmap(path, static_cast<UINT>(Scale(56, state.dpi)));
-      hint = L"图标有效 · 将写入生成 EXE";
+      hint = L"图标有效 · 大图将自动缩至 256 像素";
       hint_color = kSuccess;
     } catch (...) {
       hint = L"图标不可用 · 请选择有效的 PNG 或 ICO 文件";
@@ -551,6 +552,7 @@ void RefreshIconPreview(State& state) {
   state.icon_preview = replacement;
   state.icon_hint_color = hint_color;
   SetDynamicLabelText(state.window, kIconHint, hint);
+  EnableWindow(GetDlgItem(state.window, kDefaultIcon), !icon_text.empty());
   const auto rect = ScaleRect(state.icon_preview_rect, state.dpi);
   RedrawWindow(state.window, &rect, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_NOCHILDREN);
@@ -739,8 +741,9 @@ void BuildInterface(State& state) {
   AddLabel(state, L"应用图标", 558, 382, 88, 20, 0, state.small_font);
   AddEdit(state, L"", 734, 374, 230, kIcon, L"留空使用默认图标");
   AddButton(state, L"选择图标", 972, 374, 100, 30, kBrowseIcon);
-  AddLabel(state, L"未选择自定义图标 · 使用 Windows 默认图标", 734, 410, 338,
+  AddLabel(state, L"使用 Windows 默认图标", 734, 410, 230,
            20, kIconHint, state.small_font);
+  AddButton(state, L"默认图标", 972, 406, 100, 30, kDefaultIcon);
   AddLabel(state, L"窗口尺寸", 558, 454, 88, 20, 0, state.small_font);
   AddEdit(state, L"1280", 656, 447, 82, kWidth, nullptr, ES_NUMBER);
   AddLabel(state, L"×", 746, 453, 20, 20, 0, state.section_font);
@@ -760,10 +763,10 @@ void BuildInterface(State& state) {
   CheckDlgButton(state.window, kSpa, BST_CHECKED);
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
 
-  AddLabel(state, L"输出位置", 48, 571, 86, 20, 0, state.small_font);
-  AddEdit(state, L"", 134, 566, 566, kOutput, L"选择生成的 .exe 文件位置");
-  AddButton(state, L"选择位置", 710, 566, 104, 30, kBrowseOutput);
-  AddButton(state, L"生成 Windows EXE", 834, 576, 238, 54, kPack);
+  AddLabel(state, L"输出位置", 48, 561, 86, 20, 0, state.small_font);
+  AddEdit(state, L"", 134, 556, 566, kOutput, L"选择生成的 .exe 文件位置");
+  AddButton(state, L"选择位置", 710, 556, 104, 30, kBrowseOutput);
+  AddButton(state, L"生成 Windows EXE", 834, 566, 238, 50, kPack);
   EnableWindow(GetDlgItem(state.window, kBackendOrigin), FALSE);
   EnableWindow(GetDlgItem(state.window, kBackendOriginLabel), FALSE);
   RefreshHtmlEntries(state.window);
@@ -886,6 +889,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
           }
           return 0;
         }
+        case kDefaultIcon:
+          SetWindowTextW(GetDlgItem(window, kIcon), L"");
+          RefreshIconPreview(*state);
+          return 0;
         case kBrowseOutput: {
           const auto path = PickFile(window, L"选择 EXE 输出位置",
                                      L"Windows 可执行文件 (*.exe)\0*.exe\0", true);
