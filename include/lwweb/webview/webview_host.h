@@ -25,6 +25,7 @@ class WebViewHost {
 
   void Create(HWND window, const std::wstring& url, const Manifest& manifest,
               std::function<void(const std::wstring&)> on_error,
+              std::function<void(bool)> on_fullscreen_changed,
               const Logger* logger = nullptr);
   void Resize();
 
@@ -34,6 +35,7 @@ class WebViewHost {
   std::wstring url_;
   std::wstring user_data_folder_;
   std::function<void(const std::wstring&)> on_error_;
+  std::function<void(bool)> on_fullscreen_changed_;
   const Logger* logger_ = nullptr;
   Microsoft::WRL::ComPtr<ICoreWebView2Controller> controller_;
   Microsoft::WRL::ComPtr<ICoreWebView2> webview_;

@@ -32,8 +32,10 @@ namespace lwweb {
 namespace {
 
 constexpr wchar_t kClassName[] = L"lw.Web2App.Packer";
+constexpr wchar_t kProjectUrl[] = L"https://github.com/lxw112190/lw.Web2App";
+constexpr wchar_t kReleasesUrl[] = L"https://github.com/lxw112190/lw.Web2App/releases";
 constexpr int kClientWidth = 1120;
-constexpr int kClientHeight = 668;
+constexpr int kClientHeight = 720;
 constexpr int kSponsorResourceId = 201;
 constexpr COLORREF kBackground = RGB(244, 247, 252);
 constexpr COLORREF kCard = RGB(255, 255, 255);
@@ -81,6 +83,8 @@ enum ControlId {
   kBackendOriginLabel,
   kIconHint,
   kSponsorCaption,
+  kProjectHome,
+  kLatestRelease,
   kHeaderVersion,
 };
 
@@ -103,17 +107,18 @@ struct State {
   HFONT body_font = nullptr;
   HFONT small_font = nullptr;
   HBRUSH background_brush = nullptr;
+  HBRUSH card_brush = nullptr;
   std::vector<ControlLayout> controls;
   HBITMAP icon_preview = nullptr;
   HBITMAP sponsor_qr = nullptr;
   HICON default_icon = nullptr;
-  RECT left_card{28, 96, 526, 542};
-  RECT right_card{538, 96, 1092, 542};
-  RECT output_card{28, 550, 1092, 640};
+  RECT left_card{28, 96, 526, 594};
+  RECT right_card{538, 96, 1092, 594};
+  RECT output_card{28, 602, 1092, 692};
   RECT icon_preview_rect{656, 374, 724, 442};
-  RECT sponsor_rect{48, 421, 150, 523};
-  RECT sponsor_divider{48, 392, 506, 393};
-  RECT status_rect{48, 611, 824, 632};
+  RECT sponsor_rect{48, 400, 160, 512};
+  RECT sponsor_divider{48, 382, 506, 383};
+  RECT status_rect{48, 663, 824, 684};
   std::wstring status = L"准备就绪 · 请选择网页目录和输出位置";
   COLORREF status_color = kSuccess;
   COLORREF icon_hint_color = kMuted;
@@ -527,10 +532,18 @@ void RevealOutputInExplorer(const std::filesystem::path& output) {
                 SW_SHOWNORMAL);
 }
 
+void OpenWebLink(HWND owner, const wchar_t* url) {
+  const auto result = reinterpret_cast<INT_PTR>(
+      ShellExecuteW(owner, L"open", url, nullptr, nullptr, SW_SHOWNORMAL));
+  if (result <= 32)
+    MessageBoxW(owner, L"无法打开浏览器，请检查系统默认浏览器设置。",
+                L"lw.Web2App", MB_OK | MB_ICONWARNING);
+}
+
 void RefreshIconPreview(State& state) {
   const auto icon_text = Trim(Text(state.window, kIcon));
   HBITMAP replacement = nullptr;
-  std::wstring hint = L"使用 Windows 默认图标";
+  std::wstring hint = L"使用内置默认图标";
   COLORREF hint_color = kMuted;
   if (!icon_text.empty()) {
     try {
@@ -541,7 +554,7 @@ void RefreshIconPreview(State& state) {
                      [](wchar_t value) { return static_cast<wchar_t>(std::towlower(value)); });
       if (extension != L".png" && extension != L".ico") throw Error("Icon must be PNG or ICO");
       replacement = CreateIconPreviewBitmap(path, static_cast<UINT>(Scale(56, state.dpi)));
-      hint = L"图标有效 · 大图将自动缩至 256 像素";
+      hint = L"图标有效 · 已自动适配";
       hint_color = kSuccess;
     } catch (...) {
       hint = L"图标不可用 · 请选择有效的 PNG 或 ICO 文件";
@@ -719,10 +732,12 @@ void BuildInterface(State& state) {
   AddLabel(state, L"解决旧系统跨域与局域网访问限制", 232, 301, 274, 20, 0, state.small_font);
   AddLabel(state, L"后台地址", 48, 330, 88, 20, kBackendOriginLabel, state.small_font);
   AddEdit(state, L"", 136, 326, 370, kBackendOrigin, L"例如：http://192.0.2.10:8080");
-  AddLabel(state, L"联系与支持", 170, 408, 150, 24, 0, state.section_font);
+  AddLabel(state, L"联系与支持", 176, 400, 150, 24, 0, state.section_font);
   AddLabel(state,
            L"作者：天天代码码天天\r\nQQ：819069052\r\nQQ群：758616458\r\n扫码支持项目维护",
-           170, 438, 310, 76, kSponsorCaption, state.small_font);
+           176, 430, 330, 76, kSponsorCaption, state.small_font);
+  AddButton(state, L"GitHub 项目主页", 48, 536, 216, 30, kProjectHome);
+  AddButton(state, L"查看最新版本", 274, 536, 232, 30, kLatestRelease);
 
   AddLabel(state, L"02  应用设置", 558, 111, 200, 25, 0, state.section_font);
   AddLabel(state, L"应用名称", 558, 148, 88, 20, 0, state.small_font);
@@ -741,7 +756,7 @@ void BuildInterface(State& state) {
   AddLabel(state, L"应用图标", 558, 382, 88, 20, 0, state.small_font);
   AddEdit(state, L"", 734, 374, 230, kIcon, L"留空使用默认图标");
   AddButton(state, L"选择图标", 972, 374, 100, 30, kBrowseIcon);
-  AddLabel(state, L"使用 Windows 默认图标", 734, 410, 230,
+  AddLabel(state, L"使用内置默认图标", 734, 410, 230,
            20, kIconHint, state.small_font);
   AddButton(state, L"默认图标", 972, 406, 100, 30, kDefaultIcon);
   AddLabel(state, L"窗口尺寸", 558, 454, 88, 20, 0, state.small_font);
@@ -763,10 +778,10 @@ void BuildInterface(State& state) {
   CheckDlgButton(state.window, kSpa, BST_CHECKED);
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
 
-  AddLabel(state, L"输出位置", 48, 561, 86, 20, 0, state.small_font);
-  AddEdit(state, L"", 134, 556, 566, kOutput, L"选择生成的 .exe 文件位置");
-  AddButton(state, L"选择位置", 710, 556, 104, 30, kBrowseOutput);
-  AddButton(state, L"生成 Windows EXE", 834, 566, 238, 50, kPack);
+  AddLabel(state, L"输出位置", 48, 613, 86, 20, 0, state.small_font);
+  AddEdit(state, L"", 134, 608, 566, kOutput, L"选择生成的 .exe 文件位置");
+  AddButton(state, L"选择位置", 710, 608, 104, 30, kBrowseOutput);
+  AddButton(state, L"生成 Windows EXE", 834, 618, 238, 50, kPack);
   EnableWindow(GetDlgItem(state.window, kBackendOrigin), FALSE);
   EnableWindow(GetDlgItem(state.window, kBackendOriginLabel), FALSE);
   RefreshHtmlEntries(state.window);
@@ -793,6 +808,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       state->dpi = GetDpiForWindow(window);
       RecreateFonts(*state);
       state->background_brush = CreateSolidBrush(kBackground);
+      state->card_brush = CreateSolidBrush(kCard);
       state->default_icon = static_cast<HICON>(LoadImageW(
           GetModuleHandleW(nullptr), MAKEINTRESOURCEW(1), IMAGE_ICON,
           Scale(56, state->dpi), Scale(56, state->dpi), LR_DEFAULTCOLOR));
@@ -893,6 +909,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
           SetWindowTextW(GetDlgItem(window, kIcon), L"");
           RefreshIconPreview(*state);
           return 0;
+        case kProjectHome: OpenWebLink(window, kProjectUrl); return 0;
+        case kLatestRelease: OpenWebLink(window, kReleasesUrl); return 0;
         case kBrowseOutput: {
           const auto path = PickFile(window, L"选择 EXE 输出位置",
                                      L"Windows 可执行文件 (*.exe)\0*.exe\0", true);
@@ -913,6 +931,11 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       if (id == kModeHint || id == kSponsorCaption || id == kHeaderVersion) color = kMuted;
       if (state && id == kIconHint) color = state->icon_hint_color;
       SetTextColor(dc, color);
+      if (state && id == kIconHint) {
+        SetBkMode(dc, OPAQUE);
+        SetBkColor(dc, kCard);
+        return reinterpret_cast<INT_PTR>(state->card_brush);
+      }
       return reinterpret_cast<INT_PTR>(GetStockObject(NULL_BRUSH));
     }
     case WM_CTLCOLORBTN: {
@@ -974,6 +997,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
         DeleteObject(state->body_font);
         DeleteObject(state->small_font);
         DeleteObject(state->background_brush);
+        DeleteObject(state->card_brush);
         if (state->icon_preview) DeleteObject(state->icon_preview);
         if (state->sponsor_qr) DeleteObject(state->sponsor_qr);
         if (state->default_icon) DestroyIcon(state->default_icon);
@@ -996,6 +1020,8 @@ int RunPackerGui(HINSTANCE instance) {
   window_class.hInstance = instance;
   window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
+  window_class.hIconSm = static_cast<HICON>(LoadImageW(
+      instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR));
   window_class.hbrBackground = nullptr;
   window_class.lpszClassName = kClassName;
   if (!RegisterClassExW(&window_class)) throw Error("Cannot register the packer window");

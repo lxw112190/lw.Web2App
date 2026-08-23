@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(lw.Web2App VERSION 0.2.2 LANGUAGES C CXX)
+project(lw.Web2App VERSION 0.2.3 LANGUAGES C CXX)
 
 configure_file(resources/version.h.in generated/lwweb/version.h @ONLY)
 if(WIN32)
+  set(LWWEB_APP_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/windows/lw.Web2App.ico")
   configure_file(resources/lwweb.rc.in generated/lwweb.rc @ONLY)
   set(LWWEB_SPONSOR_RESOURCE "${CMAKE_CURRENT_SOURCE_DIR}/docs/assets/sponsor.jpg")
   configure_file(resources/gui_resources.rc.in generated/gui_resources.rc @ONLY)

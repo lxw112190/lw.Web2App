@@ -93,11 +93,13 @@ WebViewHost::~WebViewHost() {
 
 void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& manifest,
                          std::function<void(const std::wstring&)> on_error,
+                         std::function<void(bool)> on_fullscreen_changed,
                          const Logger* logger) {
   window_ = window;
   url_ = url;
   manifest_ = manifest;
   on_error_ = std::move(on_error);
+  on_fullscreen_changed_ = std::move(on_fullscreen_changed);
   logger_ = logger;
   user_data_folder_ = UserDataFolder(manifest_);
   const HRESULT started = CreateCoreWebView2EnvironmentWithOptions(
@@ -144,6 +146,15 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                              GetWindowLongPtrW(window_, GWL_STYLE));
                                          const bool fullscreen =
                                              (style & WS_OVERLAPPEDWINDOW) == 0;
+                                         BOOL contains_fullscreen_element = FALSE;
+                                         if (webview_)
+                                           webview_->get_ContainsFullScreenElement(
+                                               &contains_fullscreen_element);
+                                         // 网页处于标准 Fullscreen API 状态时，让 WebView2
+                                         // 自己处理 Esc；随后 change 事件会恢复 Native 窗口。
+                                         if (pressed && key == VK_ESCAPE &&
+                                             contains_fullscreen_element)
+                                           return S_OK;
                                          if (pressed &&
                                              (key == VK_F11 || (key == VK_ESCAPE && fullscreen))) {
                                            args->put_Handled(TRUE);
@@ -154,6 +165,25 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                        .Get(),
                                    &accelerator_token);
                                controller_->get_CoreWebView2(&webview_);
+                               EventRegistrationToken fullscreen_token{};
+                               webview_->add_ContainsFullScreenElementChanged(
+                                   Callback<
+                                       ICoreWebView2ContainsFullScreenElementChangedEventHandler>(
+                                       [this](ICoreWebView2* sender, IUnknown*) -> HRESULT {
+                                         BOOL contains = FALSE;
+                                         if (SUCCEEDED(sender->get_ContainsFullScreenElement(
+                                                 &contains))) {
+                                           if (logger_)
+                                             logger_->Info(contains
+                                                               ? "Web fullscreen entered"
+                                                               : "Web fullscreen exited");
+                                           if (on_fullscreen_changed_)
+                                             on_fullscreen_changed_(contains != FALSE);
+                                         }
+                                         return S_OK;
+                                       })
+                                       .Get(),
+                                   &fullscreen_token);
                                Microsoft::WRL::ComPtr<ICoreWebView2_4> webview4;
                                if (SUCCEEDED(webview_.As(&webview4))) {
                                  EventRegistrationToken download_token{};

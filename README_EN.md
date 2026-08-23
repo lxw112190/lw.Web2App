@@ -14,7 +14,7 @@ Windows graphical packager:
 
 The Windows GUI uses a two-column layout. The left side selects a local build or URL, entry page, start path, and controlled backend proxy. The right side configures the window title, PE ProductName, FileDescription, company, version, copyright, live icon preview, dimensions, and runtime options. The title continues to synchronize into ProductName and FileDescription until either field is edited manually. Output and progress share a full-width bottom area, while resource compression remains on a worker thread so large projects do not freeze the UI. After a successful package, File Explorer opens automatically with the generated EXE selected.
 
-Versions may contain one to four numeric components and are normalized to `a.b.c.d`; every component must be within `0..65535`. PNG and ICO files are previewed immediately and validated before packaging. The sponsor QR image is embedded in the GUI executable and does not depend on a sidecar file.
+Versions may contain one to four numeric components and are normalized to `a.b.c.d`; every component must be within `0..65535`. PNG and ICO files are previewed immediately and validated before packaging; common PNG images larger than 256 pixels are proportionally resized, and the built-in icon can be restored at any time. Both the sponsor QR image and application icon are embedded in the GUI executable and do not depend on sidecar files.
 
 Linux graphical packager (Ubuntu 22.04):
 
@@ -30,7 +30,7 @@ Linux graphical packager (Ubuntu 22.04):
 - WebView2 Evergreen Runtime with the WebView2 Loader statically linked.
 - Independently designed `LWWEB002` V2 payload container with `LWWEB001` V1 read compatibility.
 - Combined SHA-256 verification of the resource ZIP and manifest before embedded content is opened.
-- Generated applications start in borderless fullscreen by default; `F11` toggles and `Esc` exits fullscreen.
+- Generated applications start in borderless fullscreen by default; `F11` toggles and `Esc` exits fullscreen. On Windows, standard web Fullscreen API requests also synchronize the native host window with borderless fullscreen mode.
 - spdlog-based rotating packager/runtime logs: INFO by default, 2 MiB per file, five files retained.
 - ZIP central-directory indexing and per-request decompression instead of eager extraction.
 - A 32 MiB LRU cache for small hot resources; large files do not remain in memory.

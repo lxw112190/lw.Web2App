@@ -134,6 +134,8 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   window_class.hInstance = instance;
   window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
   window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
+  window_class.hIconSm = static_cast<HICON>(LoadImageW(
+      instance, MAKEINTRESOURCEW(1), IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR));
   window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   window_class.lpszClassName = class_name;
   if (!RegisterClassExW(&window_class)) throw Error("Cannot register runtime window");
@@ -159,6 +161,7 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
           MessageBoxW(window, error.c_str(), L"lw.Web2App", MB_OK | MB_ICONERROR);
           DestroyWindow(window);
         },
+        [window, state](bool fullscreen) { SetFullscreen(window, *state, fullscreen); },
         &state->logger);
   } catch (...) {
     SetWindowLongPtrW(window, GWLP_USERDATA, 0);
