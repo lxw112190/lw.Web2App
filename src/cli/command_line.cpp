@@ -5,6 +5,9 @@
 #include "lwweb/common/path_utils.h"
 #include "lwweb/common/pe_version.h"
 #include "lwweb/packer/payload.h"
+#ifdef _WIN32
+#include "lwweb/pe/pe_resources.h"
+#endif
 #include "lwweb/version.h"
 
 #include <algorithm>
@@ -124,6 +127,16 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
   options.metadata.version =
       NormalizePeVersion(Utf8ToWide(ArgumentValue(args, "--version", "1.0.0.0")));
   options.metadata.copyright = Utf8ToWide(ArgumentValue(args, "--copyright"));
+  options.signing.certificate_thumbprint =
+      ArgumentValue(args, "--sign-cert-thumbprint");
+  options.signing.enabled =
+      !options.signing.certificate_thumbprint.empty();
+  options.signing.timestamp_url = ArgumentValue(args, "--timestamp-url");
+  options.signing.signtool =
+      std::filesystem::u8path(ArgumentValue(args, "--signtool"));
+  if (!options.signing.enabled &&
+      (!options.signing.timestamp_url.empty() || !options.signing.signtool.empty()))
+    throw Error("--timestamp-url and --signtool require --sign-cert-thumbprint");
   return command;
 }
 
@@ -142,7 +155,11 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "             [--ipc --ipc-capability app.info --ipc-root ${DOCUMENTS}]\n"
        << "             [--product-name App] [--file-description Description]\n"
        << "             [--icon app.png] [--company Company] [--version 1.0.0.0]\n"
-       << "             [--copyright Copyright]\n"
+       << "             [--copyright Copyright]\n";
+  if (platform == CliPlatform::Windows)
+    help << "             [--sign-cert-thumbprint SHA1] [--timestamp-url URL]\n"
+         << "             [--signtool path\\to\\signtool.exe]\n";
+  help
        << "  " << executable << " pack-url <url> <" << application
        << "> [--title App] [--product-name App] [--file-description Description]\n"
        << "             [--app-id com.example.app] [--windowed]\n"
@@ -159,7 +176,11 @@ int RunCommandLine(const std::vector<std::string>& args,
     return 0;
   }
   if (command.action == CliAction::Inspect) {
-    output << SerializeManifest(LoadPayload(command.inspect_target).manifest, true) << '\n';
+    const auto payload = LoadPayload(command.inspect_target);
+#ifdef _WIN32
+    VerifyPePayloadBinding(command.inspect_target, payload.footer.sha256);
+#endif
+    output << SerializeManifest(payload.manifest, true) << '\n';
     return 0;
   }
   command.pack.progress = [&output](const std::string& message) { output << message << '\n'; };

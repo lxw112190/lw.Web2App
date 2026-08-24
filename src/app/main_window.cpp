@@ -577,6 +577,7 @@ std::wstring LocalizeProgress(const std::string& message) {
     return L"正在写入图标和版本信息…";
   if (message == "Compressing static resources") return L"正在压缩网页资源…";
   if (message == "Preparing payload") return L"正在准备应用 Payload…";
+  if (message == "Signing application") return L"正在执行 Authenticode 签名…";
   if (message == "Appending payload and SHA-256" ||
       message == "Appending prepared payload")
     return L"正在写入已校验的 Payload…";

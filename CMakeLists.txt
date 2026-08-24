@@ -134,8 +134,8 @@ target_link_libraries(lwweb_core PUBLIC
   spdlog::spdlog)
 
 if(WIN32)
-  target_sources(lwweb_core PRIVATE src/pe/pe_resources.cpp)
-  target_link_libraries(lwweb_core PUBLIC bcrypt ws2_32 version shell32)
+  target_sources(lwweb_core PRIVATE src/pe/authenticode.cpp src/pe/pe_resources.cpp)
+  target_link_libraries(lwweb_core PUBLIC bcrypt ws2_32 version shell32 wintrust)
   target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
     SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)
   add_executable(lwweb WIN32
@@ -207,7 +207,8 @@ if(BUILD_TESTING)
     tests/test_main.cpp
     tests/payload_tests.cpp
     tests/path_tests.cpp
-    tests/resource_tests.cpp)
+    tests/resource_tests.cpp
+    tests/signing_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)
   target_link_libraries(lwweb_tests PRIVATE lwweb_core)
   if(MSVC)

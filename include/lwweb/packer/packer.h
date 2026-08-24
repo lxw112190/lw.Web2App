@@ -29,6 +29,16 @@ struct PeMetadata {
   std::filesystem::path icon;
 };
 
+// Windows Certificate Store 签名设置。第一版只接受证书 SHA-1 指纹，
+// 不在命令行、Manifest 或配置文件中接收 PFX 密码。
+struct SigningConfig {
+  bool enabled = false;
+  std::string certificate_thumbprint;
+  std::string timestamp_url;
+  std::filesystem::path signtool;
+  bool verify_after_sign = true;
+};
+
 // 一次打包任务所需的全部输入、输出和进度回调。
 // runner 可以是原始打包器，也可以是已经携带 Payload 的生成程序。
 struct PackOptions {
@@ -37,6 +47,7 @@ struct PackOptions {
   std::filesystem::path output;
   Manifest manifest;
   PeMetadata metadata;
+  SigningConfig signing;
   SecurityLimits limits;
   std::function<void(const std::string&)> progress;
 };

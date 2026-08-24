@@ -105,6 +105,10 @@ void RunPayloadBindingTests() {
     unsigned_required_rejected = true;
   }
   Check(unsigned_required_rejected,
-        "Authenticode-required binding fails closed before signing support");
+        "Authenticode-required binding requires a valid PE signature");
+
+  lwweb::UpdatePeResources(executable, lwweb::PeMetadata{}, std::nullopt);
+  Check(!lwweb::ReadPePayloadBinding(executable).has_value(),
+        "unsigned repackaging removes an inherited signed payload binding");
 #endif
 }

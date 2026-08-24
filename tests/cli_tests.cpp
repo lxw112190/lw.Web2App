@@ -47,6 +47,32 @@ void RunCliTests() {
   Check(metadata_command.pack.metadata.copyright == L"Copyright 2026",
         "copyright parsed");
 
+  const auto signing_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "pack-url", "https://example.com", "signed.exe",
+       "--sign-cert-thumbprint", "00112233445566778899AABBCCDDEEFF00112233",
+       "--timestamp-url", "https://timestamp.example.com",
+       "--signtool", "tools/signtool.exe"},
+      "runner.exe");
+  Check(signing_command.pack.signing.enabled &&
+            signing_command.pack.signing.certificate_thumbprint ==
+                "00112233445566778899AABBCCDDEEFF00112233" &&
+            signing_command.pack.signing.timestamp_url ==
+                "https://timestamp.example.com" &&
+            signing_command.pack.signing.signtool ==
+                std::filesystem::path("tools/signtool.exe"),
+        "Authenticode Certificate Store options parsed");
+  bool orphaned_signing_option_rejected = false;
+  try {
+    (void)lwweb::ParseCommandLine(
+        {"lw.Web2App", "pack-url", "https://example.com", "app.exe",
+         "--timestamp-url", "https://timestamp.example.com"},
+        "runner.exe");
+  } catch (...) {
+    orphaned_signing_option_rejected = true;
+  }
+  Check(orphaned_signing_option_rejected,
+        "timestamp option requires a signing certificate");
+
   const auto proxy_command = lwweb::ParseCommandLine(
       {"lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
        "--backend-origin", "http://192.0.2.10:8080"},
@@ -117,6 +143,12 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--product-name") !=
             std::string::npos,
         "help includes PE product name option");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find(
+            "--sign-cert-thumbprint") != std::string::npos,
+        "Windows help includes Authenticode signing options");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Linux).find(
+            "--sign-cert-thumbprint") == std::string::npos,
+        "Linux help does not advertise Windows Authenticode options");
   Check(lwweb::NormalizePeVersion(L"1.2.3") == L"1.2.3.0",
         "PE version helper pads missing components");
   bool invalid_version_rejected = false;

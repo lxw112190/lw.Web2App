@@ -30,6 +30,7 @@ Linux graphical packager (Ubuntu 22.04):
 - WebView2 Evergreen Runtime with the WebView2 Loader statically linked.
 - Independently designed `LWWEB002` V2 payload container with `LWWEB001` V1 read compatibility.
 - Combined SHA-256 verification of the resource ZIP and manifest before embedded content is opened.
+- Windows CLI Authenticode signing through a Certificate Store code-signing certificate, binding publisher trust to the final payload digest.
 - Generated applications start in borderless fullscreen by default; `F11` toggles and `Esc` exits fullscreen. On Windows, standard web Fullscreen API requests also synchronize the native host window with borderless fullscreen mode.
 - spdlog-based rotating packager/runtime logs: INFO by default, 2 MiB per file, five files retained.
 - ZIP central-directory indexing and per-request decompression instead of eager extraction.
@@ -52,17 +53,18 @@ lw.Web2App creates a single-file application using a **platform Runner plus an e
 ### Packaging
 
 1. **Validate the input**: local mode scans and verifies the HTML selected by `entry`, ensures `start_path` cannot leave the private local service, then enforces limits on file count, individual size, and total size.
-2. **Copy the Runner**: the current `lw.Web2App.exe` or `lw.Web2App` supplies the native PE/ELF prefix. If an already packaged app is used as the packer, only its original Runner prefix is copied, so old payloads are not nested.
-3. **Write platform metadata**: Windows updates PE icons and version fields; Linux adds executable permissions. Per-generated-app desktop files, icons, and DEB metadata are planned separately.
-4. **Build the ZIP**: files are streamed into a temporary ZIP under normalized relative paths, avoiding simultaneous in-memory copies of the source and complete archive. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
-5. **Append the container**: the ZIP, Manifest JSON, and fixed 80-byte footer are streamed onto the PE/ELF file. The V2 footer stores the format, flags, section offsets/lengths, and a combined SHA-256 of ZIP plus manifest.
+2. **Prepare the payload**: normalized resources are streamed to a temporary ZIP; the Manifest is serialized exactly once, and the final combined ZIP-plus-Manifest SHA-256 is computed before the Runner is modified. Absolute paths, drive letters, `..`, NUL bytes, and duplicate archive paths are rejected.
+3. **Copy and clean the Runner**: only the native PE/ELF prefix is copied. Windows always removes an inherited Certificate Table and old `LWWEB_BINDING`, so unsigned output cannot impersonate the template's signature and repeated packaging never nests an old payload.
+4. **Write platform metadata**: Windows updates PE icons and version fields and, for a signed package, writes an Authenticode-required payload binding. Linux adds executable permissions.
+5. **Append the complete container**: the prepared ZIP, Manifest, and fixed 80-byte Footer are streamed onto the executable, then reloaded to validate the digest.
+6. **Optionally sign and publish**: Windows signs the complete EXE through the Windows SDK SignTool and a Certificate Store thumbprint, then jointly verifies WinVerifyTrust, the PE Binding, and Footer. The Certificate Table remains at physical EOF; Runtime skips it and up to seven preceding alignment bytes to locate the Payload Footer. Only a fully verified file is atomically published.
 
 Online URL mode does not snapshot or embed the remote website. Its ZIP is empty and the manifest records only the target URL and window settings. The generated application therefore requires network access and follows future changes to that website. On Linux, the runtime passes `http_proxy`, `https_proxy`, `all_proxy`, and `no_proxy` (including their uppercase forms) to WebKitGTK.
 
 ### Runtime
 
 1. The executable reads the `LWWEB002` footer from its own end. Without a footer it opens the packager; with a footer it enters generated-application mode. Legacy `LWWEB001` packages remain readable.
-2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP plus manifest. It refuses to open embedded content when validation fails.
+2. The Runner verifies that every offset and length is inside the EXE, limits manifest size, and hashes the resource ZIP plus manifest. A signed Windows package additionally requires the Footer digest to match the Authenticode-protected `LWWEB_BINDING` and pass WinVerifyTrust. Any failure prevents embedded content from opening.
 3. Local mode indexes only the ZIP central directory. It neither extracts the whole site to disk nor loads every resource into memory at startup.
 4. The Runner first acquires an `app_id`-specific single-instance lock through a Windows named mutex or Linux `flock`, then starts the private HTTP service on its stable preferred `127.0.0.1` port. The service validates the exact Host, decompresses one requested resource at a time, sets its MIME type, and applies SPA fallback. If an unrelated process occupies the preferred port, deterministic alternatives are tried and logged.
 5. When `backend_proxy` is enabled, the local server matches `/__lw_proxy__/` before static resources. Only GET, HEAD, POST, PUT, PATCH, DELETE, and OPTIONS are forwarded to the fixed `origin`; query strings and bodies are preserved, while cookies and same-origin redirects are rewritten. The page never contacts the LAN backend directly.
@@ -269,7 +271,8 @@ lw.Web2App.exe pack-url https://example.com .\Example.exe --title "Online App"
 
 ### Inspect a generated application
 
-`inspect` verifies the payload SHA-256 and prints its manifest:
+`inspect` verifies the payload SHA-256 and prints its manifest. Signed Windows
+packages additionally validate `LWWEB_BINDING` and Authenticode:
 
 ```powershell
 lw.Web2App.exe inspect .\MyApp.exe
@@ -302,6 +305,23 @@ Additional options:
 - `--company`: write the company name.
 - `--version`: write file and product versions; one to four numeric components are padded to four.
 - `--copyright`: write copyright metadata.
+
+### Windows Authenticode signing
+
+The first version uses a code-signing certificate already installed with its private key in the Windows Certificate Store. It intentionally does not accept PFX files or passwords on the command line:
+
+```powershell
+lw.Web2App.exe pack .\dist .\MyApp.exe `
+  --title "My App" `
+  --sign-cert-thumbprint 00112233445566778899AABBCCDDEEFF00112233 `
+  --timestamp-url https://timestamp.example.com
+```
+
+- `--sign-cert-thumbprint`: enable signing with the certificate SHA-1 thumbprint; whitespace is ignored.
+- `--timestamp-url`: optional RFC 3161 timestamp service using `http://` or `https://`.
+- `--signtool`: optional full SignTool path; otherwise `PATH` and the newest installed x64 Windows SDK are searched.
+
+The packer removes the template's old Certificate Table, writes PE metadata and a digest-bearing `LWWEB_BINDING`, appends the exact prepared payload, and signs the complete EXE last. Runtime recognizes the Certificate Table emitted at physical EOF and safely locates the Footer before it, completing the certificate → PE Binding → Payload trust chain. Without a certificate option, output remains unsigned and any inherited signature and binding are explicitly removed.
 
 A generated EXE can also execute CLI packaging commands. Only its original Runner prefix is copied, so old payloads are never nested.
 
@@ -338,7 +358,7 @@ With IPC enabled, the Runtime accepts messages only from the exact current `127.
 
 The packer first creates a `PreparedPayload`: ZIP resources, the exact Manifest
 bytes serialized once, and their combined SHA-256 are finalized before the Runner
-is modified. Later PE metadata processing and future Authenticode signing never
+is modified. Later PE metadata processing and Authenticode signing never
 serialize the Manifest again; the exact ZIP and Manifest bytes covered by the
 prepared digest are appended to the executable. This separation provides a stable
 digest for Signed Payload Binding without changing the existing `LWWEB002` footer.
@@ -362,17 +382,14 @@ All integers are explicitly serialized as little endian instead of relying on co
 
 ### Signed Payload Binding
 
-New Windows applications also store the same Payload SHA-256 in the PE
-`LWWEB_BINDING` resource. It uses a fixed 48-byte `LWBIND01` binary format. At
-startup, the Runtime first verifies `ZIP + Manifest` against the Footer and then
-compares the PE Binding digest with the Footer digest. Legacy applications without
-a Binding remain compatible; malformed data, unknown versions or security flags,
-and digest mismatches are rejected.
-
-This stage does not yet set the “Authenticode required” flag. The Binding therefore
-establishes a stable payload association but does not independently prove publisher
-identity. The next Authenticode stage will protect this PE resource and complete the
-certificate → PE Binding → Payload trust chain.
+Signed Windows applications store the same Payload SHA-256 in the PE
+`LWWEB_BINDING` resource. Its fixed 48-byte `LWBIND01` format sets the
+“Authenticode required” flag. At startup, the Runtime verifies `ZIP + Manifest`
+against the Footer, compares the Binding and Footer digests, and finally validates
+the signature protecting that PE resource through WinVerifyTrust. This completes
+the certificate → PE Binding → Payload trust chain. Legacy and ordinary unsigned
+applications without a Binding remain compatible; malformed data, unknown versions
+or flags, digest mismatches, and invalid signatures are rejected.
 
 ## Security Boundary
 
@@ -385,7 +402,7 @@ This project packages trusted static web applications. It is not a sandbox for h
 - The HTTP service listens only on IPv4 loopback and requires the exact per-app port Host value.
 - The backend proxy accepts only the fixed Manifest `http://` origin; arbitrary URLs, cross-site callers, cross-host redirects, and ZIP resources that collide with its prefix are rejected, with explicit size and timeout limits.
 - Native IPC is disabled by default and local-mode only; capabilities, exact origin, fixed roots, and session grants are enforced natively.
-- SHA-256 detects corruption or modification but does not authenticate a publisher. Digital signatures are planned separately.
+- SHA-256 detects corruption or modification but does not authenticate a publisher. Use the Windows CLI Authenticode options when publisher identity is required, and protect the code-signing private key appropriately.
 
 ## Project Layout
 
@@ -410,9 +427,9 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 2. Builds and tests Linux x64 with Ninja, GTK3, WebKitGTK 4.1, and OpenSSL on Ubuntu 22.04 and 24.04.
 3. Builds the `wechat-article-formatter` Vite bundle in all platform jobs.
 4. Generates a Windows EXE or Linux ELF and validates its payload with `inspect`.
-5. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
-6. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts.
-7. Collects all tested platform files into releases for `v*` tags.
+5. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
+6. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
+7. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
 
 ## Dependencies
 
@@ -441,10 +458,8 @@ Next priorities are generated-app desktop/icon/DEB metadata, AppImage evaluation
 Other planned improvements:
 
 - Multi-resolution icon generation
-- Authenticode code signing
 - Tray support, activating the existing window on a second launch, and always-on-top windows
 - External-link policy
-- JavaScript/C++ IPC
 - Custom user agents, startup arguments, and CSP
 
 ## Contact and Support

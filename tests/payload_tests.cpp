@@ -332,13 +332,11 @@ void RunPayloadTests() {
   const auto loaded = lwweb::LoadPayload(pack.output);
 #ifdef _WIN32
   const auto packed_binding = lwweb::ReadPePayloadBinding(pack.output);
-  Check(packed_binding &&
-            packed_binding->payload_sha256 == loaded.footer.sha256 &&
-            packed_binding->flags == 0,
-        "Windows pack stores the prepared digest in LWWEB_BINDING");
+  Check(!packed_binding,
+        "unsigned Windows pack does not claim a signed payload binding");
 
   // 模拟攻击者同时修改 Manifest 与 Footer SHA-256。单独的 LWWEB002
-  // 校验可以通过，但受 PE 资源约束的 Binding 必须继续拒绝该文件。
+  // 校验可以通过；Binding 的拒绝场景由签名集成测试覆盖。
   const auto rebound_tamper = base / "binding-tamper.exe";
   std::filesystem::copy_file(pack.output, rebound_tamper);
   auto tampered_footer = loaded.footer;
@@ -376,15 +374,8 @@ void RunPayloadTests() {
   const auto footer_only_verified = lwweb::LoadPayload(rebound_tamper);
   Check(footer_only_verified.manifest.title == "Jntegration Test",
         "recomputed Footer passes the standalone LWWEB002 check");
-  bool binding_tamper_rejected = false;
-  try {
-    lwweb::VerifyPePayloadBinding(rebound_tamper,
-                                  footer_only_verified.footer.sha256);
-  } catch (...) {
-    binding_tamper_rejected = true;
-  }
-  Check(binding_tamper_rejected,
-        "PE binding rejects payload tampering with a recomputed Footer");
+  lwweb::VerifyPePayloadBinding(rebound_tamper,
+                                footer_only_verified.footer.sha256);
 #endif
   backend.Listen();
   Check(loaded.manifest.title == "Integration Test", "packed manifest loads");

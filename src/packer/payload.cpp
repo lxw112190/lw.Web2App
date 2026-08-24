@@ -3,6 +3,10 @@
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
 
+#ifdef _WIN32
+#include "lwweb/pe/authenticode.h"
+#endif
+
 #include <algorithm>
 #include <fstream>
 #include <limits>
@@ -31,16 +35,70 @@ std::uint64_t Get64(const std::uint8_t*& input) {
   return value;
 }
 
-std::array<std::uint8_t, kPayloadFooterSize> ReadFooterBytes(
-    const std::filesystem::path& executable) {
-  const auto size = FileSize(executable);
-  if (size < kPayloadFooterSize) throw Error("Executable does not contain a payload footer");
+struct FooterBytes {
+  std::array<std::uint8_t, kPayloadFooterSize> bytes{};
+  std::uint64_t logical_file_size = 0;
+};
+
+std::array<std::uint8_t, kPayloadFooterSize> ReadFooterAt(
+    const std::filesystem::path& executable, std::uint64_t logical_file_size) {
+  if (logical_file_size < kPayloadFooterSize)
+    throw Error("Executable does not contain a payload footer");
   std::ifstream input(executable, std::ios::binary);
-  input.seekg(static_cast<std::streamoff>(size - kPayloadFooterSize));
+  input.seekg(static_cast<std::streamoff>(logical_file_size -
+                                           kPayloadFooterSize));
   std::array<std::uint8_t, kPayloadFooterSize> bytes{};
   input.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
   if (!input) throw Error("Cannot read payload footer");
   return bytes;
+}
+
+#ifdef _WIN32
+bool IsZeroPadding(const std::filesystem::path& executable,
+                   std::uint64_t offset, std::uint64_t size) {
+  if (size == 0) return true;
+  std::ifstream input(executable, std::ios::binary);
+  input.seekg(static_cast<std::streamoff>(offset));
+  std::array<char, 8> bytes{};
+  input.read(bytes.data(), static_cast<std::streamsize>(size));
+  return input && std::all_of(bytes.begin(), bytes.begin() + size,
+                              [](char value) { return value == '\0'; });
+}
+#endif
+
+FooterBytes ReadFooterBytes(const std::filesystem::path& executable) {
+  const auto physical_size = FileSize(executable);
+  auto bytes = ReadFooterAt(executable, physical_size);
+  try {
+    (void)DecodeFooter(bytes);
+    return {bytes, physical_size};
+  } catch (...) {
+#ifdef _WIN32
+    std::ifstream input(executable, std::ios::binary);
+    std::array<char, 2> magic{};
+    input.read(magic.data(), magic.size());
+    if (input && magic[0] == 'M' && magic[1] == 'Z') {
+      const auto content_end = AuthenticodeContentEnd(executable);
+      if (content_end) {
+        // SignTool aligns WIN_CERTIFICATE to an 8-byte boundary and may insert
+        // up to seven zero bytes after our Footer. Those bytes are signed but
+        // are not part of the LWWEB002 container.
+        for (std::uint64_t padding = 0; padding < 8; ++padding) {
+          if (*content_end < kPayloadFooterSize + padding) break;
+          const auto candidate_end = *content_end - padding;
+          if (!IsZeroPadding(executable, candidate_end, padding)) continue;
+          try {
+            auto signed_bytes = ReadFooterAt(executable, candidate_end);
+            (void)DecodeFooter(signed_bytes);
+            return {signed_bytes, candidate_end};
+          } catch (...) {
+          }
+        }
+      }
+    }
+#endif
+    throw;
+  }
 }
 
 }  // namespace
@@ -99,7 +157,7 @@ PayloadFooter DecodeFooter(const std::array<std::uint8_t, kPayloadFooterSize>& b
 
 bool HasPayload(const std::filesystem::path& executable) {
   try {
-    (void)DecodeFooter(ReadFooterBytes(executable));
+    (void)ReadFooterBytes(executable);
     return true;
   } catch (...) {
     return false;
@@ -107,9 +165,9 @@ bool HasPayload(const std::filesystem::path& executable) {
 }
 
 LoadedPayload LoadPayload(const std::filesystem::path& executable, bool verify_hash) {
-  const auto file_size = FileSize(executable);
-  const auto footer = DecodeFooter(ReadFooterBytes(executable));
-  ValidatePayloadBounds(footer, file_size);
+  const auto footer_bytes = ReadFooterBytes(executable);
+  const auto footer = DecodeFooter(footer_bytes.bytes);
+  ValidatePayloadBounds(footer, footer_bytes.logical_file_size);
   if (verify_hash) {
     const auto hashed_size = footer.version == kPayloadVersionV1
                                  ? footer.payload_size
@@ -134,7 +192,7 @@ LoadedPayload LoadPayload(const std::filesystem::path& executable, bool verify_h
 
 std::uint64_t RunnerPrefixSize(const std::filesystem::path& executable) {
   if (!HasPayload(executable)) return FileSize(executable);
-  return DecodeFooter(ReadFooterBytes(executable)).payload_offset;
+  return DecodeFooter(ReadFooterBytes(executable).bytes).payload_offset;
 }
 
 void AppendPreparedPayload(const std::filesystem::path& executable,

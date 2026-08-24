@@ -124,6 +124,78 @@ jobs:
             throw "Native IPC example inspection failed"
           }
 
+      - name: Verify Authenticode signed and unsigned repackaging
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $certificate = New-SelfSignedCertificate -Type CodeSigningCert `
+            -Subject 'CN=lw.Web2App CI Test' `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
+            -NotAfter (Get-Date).AddDays(1)
+          $trustedStores = @('Root', 'TrustedPublisher')
+          try {
+            foreach ($storeName in $trustedStores) {
+              $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                $storeName, 'CurrentUser')
+              $store.Open('ReadWrite')
+              try { $store.Add($certificate) } finally { $store.Close() }
+            }
+
+            $packer = (Resolve-Path 'build/Release/lw.Web2App.exe').Path
+            $signTool = Get-ChildItem `
+              "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            if (-not $signTool) { throw 'Windows SDK SignTool was not found' }
+            New-Item -ItemType Directory -Force build/signing-smoke | Out-Null
+            $source = (Resolve-Path 'examples/native-ipc').Path
+            $signed = Join-Path $PWD 'build/signing-smoke/signed.exe'
+            $pack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+              -ArgumentList @(
+                'pack', $source, $signed,
+                '--title', 'Signed-Native-IPC-Example',
+                '--sign-cert-thumbprint', $certificate.Thumbprint
+              )
+            if ($pack.ExitCode -ne 0 -or -not (Test-Path $signed)) {
+              throw 'Signed packaging failed'
+            }
+            $signature = Get-AuthenticodeSignature $signed
+            if ($signature.Status -ne 'Valid') {
+              throw "Signed output verification failed: $($signature.StatusMessage)"
+            }
+            & $signTool.FullName verify /pa /v $signed
+            if ($LASTEXITCODE -ne 0) { throw 'SignTool verification failed' }
+            $inspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+              -ArgumentList @('inspect', $signed)
+            if ($inspect.ExitCode -ne 0) { throw 'Signed payload inspection failed' }
+
+            $unsigned = Join-Path $PWD 'build/signing-smoke/repacked-unsigned.exe'
+            $repack = Start-Process -FilePath $signed -Wait -PassThru -NoNewWindow `
+              -ArgumentList @(
+                'pack', $source, $unsigned,
+                '--title', 'Repacked-Unsigned-Native-IPC-Example'
+              )
+            if ($repack.ExitCode -ne 0 -or -not (Test-Path $unsigned)) {
+              throw 'Unsigned repackaging from a signed Runner failed'
+            }
+            $unsignedSignature = Get-AuthenticodeSignature $unsigned
+            if ($unsignedSignature.Status -ne 'NotSigned') {
+              throw "Repacked unsigned output retained a signature: $($unsignedSignature.Status)"
+            }
+            $inspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+              -ArgumentList @('inspect', $unsigned)
+            if ($inspect.ExitCode -ne 0) { throw 'Unsigned payload inspection failed' }
+          } finally {
+            foreach ($storeName in $trustedStores) {
+              $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                $storeName, 'CurrentUser')
+              $store.Open('ReadWrite')
+              try { $store.Remove($certificate) } finally { $store.Close() }
+            }
+            Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
+              -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Prepare distribution
         shell: pwsh
         run: |

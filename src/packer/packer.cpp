@@ -7,6 +7,7 @@
 #include "lwweb/common/sha256.h"
 #include "lwweb/packer/payload.h"
 #ifdef _WIN32
+#include "lwweb/pe/authenticode.h"
 #include "lwweb/pe/pe_resources.h"
 #include <Windows.h>
 #endif
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <fstream>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 #include <vector>
 
@@ -272,6 +274,10 @@ void PackApplication(const PackOptions& options) {
       log.Info("Source: " + options.source_directory.u8string());
     if (options.runner.empty() || options.output.empty())
       throw Error("Runner and output paths are required");
+#ifndef _WIN32
+    if (options.signing.enabled)
+      throw Error("Authenticode signing is available only on Windows");
+#endif
     if (std::filesystem::absolute(options.runner).lexically_normal() ==
         std::filesystem::absolute(options.output).lexically_normal())
       throw Error("Output path must differ from the runner path");
@@ -305,17 +311,52 @@ void PackApplication(const PackOptions& options) {
 
     phase = "runner copy";
     Progress(options, "Copying runner");
+#ifdef _WIN32
+    const bool inherited_signature =
+        HasAuthenticodeSignature(options.runner);
+    if (inherited_signature) {
+      // 先在 Certificate Table 仍存在时定位 Payload；SignTool 可能在
+      // Footer 与证书表之间加入对齐字节，截掉证书后不能再依赖文件末尾定位。
+      const auto content_end = AuthenticodeContentEnd(options.runner);
+      if (!content_end)
+        throw Error("Signed runner does not contain a Certificate Table");
+      const auto prefix_size = HasPayload(options.runner)
+                                   ? RunnerPrefixSize(options.runner)
+                                   : *content_end;
+      std::filesystem::copy_file(options.runner, staging,
+                                 std::filesystem::copy_options::overwrite_existing,
+                                 error);
+      if (error) throw Error("Cannot copy signed runner: " + error.message());
+      phase = "inherited Authenticode removal";
+      (void)StripAuthenticodeSignature(staging);
+      std::filesystem::resize_file(staging, prefix_size, error);
+      if (error) throw Error("Cannot remove inherited payload: " + error.message());
+    } else {
+      CopyRunnerPrefix(options.runner, staging);
+    }
+#else
     CopyRunnerPrefix(options.runner, staging);
+#endif
+#ifdef _WIN32
+    log.Info(inherited_signature
+                 ? "Inherited Authenticode signature removed"
+                 : "Runner does not contain an Authenticode signature");
+#endif
     phase = "platform metadata update";
     Progress(options, "Writing platform metadata");
 #ifdef _WIN32
-    PayloadBinding binding;
-    binding.payload_sha256 = prepared.sha256;
+    std::optional<PayloadBinding> binding;
+    if (options.signing.enabled) {
+      binding.emplace();
+      binding->flags = kBindingAuthenticodeRequired;
+      binding->payload_sha256 = prepared.sha256;
+    }
     UpdatePeResources(staging, options.metadata, binding);
     log.Info("PE version metadata updated successfully");
     log.Info(options.metadata.icon.empty() ? "PE icon: default icon retained"
                                           : "PE icon updated successfully");
-    log.Info("LWWEB_BINDING resource updated successfully");
+    log.Info(binding ? "Signed LWWEB_BINDING resource updated successfully"
+                     : "Unsigned output does not contain LWWEB_BINDING");
 #else
     std::filesystem::permissions(
         staging,
@@ -328,6 +369,14 @@ void PackApplication(const PackOptions& options) {
     phase = "Prepared Payload append";
     Progress(options, "Appending prepared payload");
     AppendPreparedPayload(staging, prepared);
+#ifdef _WIN32
+    if (options.signing.enabled) {
+      phase = "Authenticode signing";
+      Progress(options, "Signing application");
+      SignAuthenticode(staging, options.signing);
+      log.Info("Authenticode signature created successfully");
+    }
+#endif
     const auto loaded = LoadPayload(staging);
 #ifdef _WIN32
     VerifyPePayloadBinding(staging, loaded.footer.sha256);

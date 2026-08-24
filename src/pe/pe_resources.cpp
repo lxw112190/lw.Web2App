@@ -3,6 +3,7 @@
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/pe_version.h"
+#include "lwweb/pe/authenticode.h"
 
 #include <Windows.h>
 #include <wincodec.h>
@@ -317,7 +318,8 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
 // 对一个干净的 PE 文件执行一次完整资源事务；失败后不能复用该事务句柄。
 void ApplyPeResources(const std::filesystem::path& executable,
                       const PeMetadata& metadata,
-                      const std::optional<PayloadBinding>& binding) {
+                      const std::optional<PayloadBinding>& binding,
+                      bool update_binding) {
   ResourceUpdate update(executable);
   if (!metadata.product_name.empty() || !metadata.company_name.empty() ||
       !metadata.file_description.empty() || !metadata.copyright.empty()) {
@@ -328,14 +330,21 @@ void ApplyPeResources(const std::filesystem::path& executable,
       ThrowResourceError("UpdateResource(RT_VERSION)");
   }
   UpdateIcon(update.get(), metadata.icon);
-  if (binding) {
-    auto bytes = EncodePayloadBinding(*binding);
-    if (!UpdateResourceW(
-            update.get(), kPayloadBindingResourceType,
-            MAKEINTRESOURCEW(kPayloadBindingResourceId),
-            MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), bytes.data(),
-            static_cast<DWORD>(bytes.size())))
-      ThrowResourceError("UpdateResource(LWWEB_BINDING)");
+  if (update_binding) {
+    if (binding) {
+      auto bytes = EncodePayloadBinding(*binding);
+      if (!UpdateResourceW(
+              update.get(), kPayloadBindingResourceType,
+              MAKEINTRESOURCEW(kPayloadBindingResourceId),
+              MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), bytes.data(),
+              static_cast<DWORD>(bytes.size())))
+        ThrowResourceError("UpdateResource(LWWEB_BINDING)");
+    } else if (!UpdateResourceW(
+                   update.get(), kPayloadBindingResourceType,
+                   MAKEINTRESOURCEW(kPayloadBindingResourceId),
+                   MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), nullptr, 0)) {
+      ThrowResourceError("DeleteResource(LWWEB_BINDING)");
+    }
   }
   update.Commit();
 }
@@ -345,10 +354,13 @@ void ApplyPeResources(const std::filesystem::path& executable,
 void UpdatePeResources(const std::filesystem::path& executable,
                        const PeMetadata& metadata,
                        const std::optional<PayloadBinding>& binding) {
-  if (metadata.product_name.empty() && metadata.company_name.empty() &&
-      metadata.file_description.empty() && metadata.copyright.empty() &&
-      metadata.icon.empty() && !binding)
-    return;
+  const bool has_metadata =
+      !metadata.product_name.empty() || !metadata.company_name.empty() ||
+      !metadata.file_description.empty() || !metadata.copyright.empty() ||
+      !metadata.icon.empty();
+  const bool update_binding =
+      binding.has_value() || ReadPePayloadBinding(executable).has_value();
+  if (!has_metadata && !update_binding) return;
   auto backup = executable;
   backup += L".pe-resource-backup.tmp";
   std::error_code file_error;
@@ -378,7 +390,7 @@ void UpdatePeResources(const std::filesystem::path& executable,
         }
       }
       try {
-        ApplyPeResources(executable, metadata, binding);
+        ApplyPeResources(executable, metadata, binding, update_binding);
         file_error.clear();
         std::filesystem::remove(backup, file_error);
         return;
@@ -443,7 +455,7 @@ void VerifyPePayloadBinding(const std::filesystem::path& executable,
   if (binding->payload_sha256 != footer_digest)
     throw Error("Signed payload binding does not match the application payload");
   if ((binding->flags & kBindingAuthenticodeRequired) != 0)
-    throw Error("Payload binding requires Authenticode verification, which is not available");
+    VerifyAuthenticodeSignature(executable);
 }
 
 }  // namespace lwweb

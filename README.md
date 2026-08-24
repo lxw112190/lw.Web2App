@@ -30,6 +30,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - Windows 使用 WebView2 Evergreen Runtime；Linux 动态使用系统 WebKitGTK，生成应用不会捆绑完整浏览器内核。
 - 自主设计的 `LWWEB002` V2 Payload 容器格式，并兼容读取 `LWWEB001` V1。
 - 程序启动时验证资源 ZIP 与 Manifest 的联合 SHA-256，内容或配置损坏时拒绝继续运行。
+- Windows CLI 可使用证书存储区中的代码签名证书生成 Authenticode 签名 EXE，并把证书信任链绑定到最终 Payload 摘要。
 - 生成应用默认无边框全屏显示，支持 `F11` 切换全屏、`Esc` 退出全屏；网页调用标准 Fullscreen API 时，Windows Native 窗口会同步进入或退出无边框全屏。
 - 基于 spdlog 的打包器/Runtime 滚动日志，默认 INFO、单文件 2 MiB、保留 5 个。
 - 只索引 ZIP 中央目录，请求资源时才解压对应文件，不会启动即展开全部内容。
@@ -53,17 +54,18 @@ lw.Web2App 采用“平台 Runner + 文件尾部载荷”的方式生成单文�
 ### 打包阶段
 
 1. **检查输入**：本地模式先扫描并确认 `entry` 指定的入口 HTML 存在，校验 `start_path` 只能定位当前本地服务，并对文件数量、单文件大小及总大小应用安全上限。
-2. **复制 Runner**：以当前平台的 `lw.Web2App.exe` 或 `lw.Web2App` 为模板，只复制其原始 PE/ELF Runner 部分。即使使用已经打包过的应用再次打包，也不会嵌套旧载荷。
-3. **写入平台元数据**：Windows 更新图标、产品名、文件说明、公司、版本和版权等 PE 资源；Linux 为生成文件补充可执行权限。Linux 桌面图标与菜单项由 lw.Web2App 自身的 DEB 包安装，任意生成应用的独立桌面集成留待后续版本。
-4. **构建 ZIP**：递归读取静态目录，将规范化后的相对路径流式压缩到临时 ZIP 文件，避免把源文件和完整 ZIP 同时驻留内存。绝对路径、盘符、`..`、NUL 和重复路径会被拒绝。
-5. **追加容器**：依次在 PE/ELF 文件尾部流式写入资源 ZIP、Manifest JSON 和固定 80 字节 Footer。V2 Footer 记录格式版本、标志、各区段偏移/长度，以及“资源 ZIP + Manifest”的联合 SHA-256。
+2. **准备 Payload**：递归读取静态目录，将规范化后的相对路径流式压缩到临时 ZIP；Manifest 只序列化一次，并提前计算“ZIP + Manifest”的最终 SHA-256。绝对路径、盘符、`..`、NUL 和重复路径会被拒绝。
+3. **复制并清理 Runner**：以当前平台的 `lw.Web2App.exe` 或 `lw.Web2App` 为模板，只复制其原始 PE/ELF Runner 部分。Windows 总会先删除 Runner 继承的 Certificate Table 和旧 `LWWEB_BINDING`，因此未请求签名的输出不会冒用模板签名；再次打包也不会嵌套旧载荷。
+4. **写入平台元数据**：Windows 更新图标、产品名、文件说明、公司、版本和版权等 PE 资源；请求签名时还会写入带“必须 Authenticode”标志的 Payload Binding。Linux 为生成文件补充可执行权限。
+5. **追加完整容器**：依次在 PE/ELF 文件尾部流式写入已准备好的 ZIP、Manifest JSON 和固定 80 字节 Footer，并重新读取验证摘要。
+6. **可选签名并发布**：Windows 通过 Windows SDK SignTool 和证书存储区中的 SHA-1 指纹对包含 Payload 的完整 EXE 签名，再使用 WinVerifyTrust、PE Binding 与 Footer 做联合验证。SignTool 的 Certificate Table 位于文件末尾，Runtime 会跳过它及之前最多 7 字节的对齐填充来定位 Payload Footer。全部成功后才原子替换最终输出文件。
 
 在线 URL 模式不保存远端网站内容，ZIP 为空；Manifest 只记录目标 URL 和窗口配置，启动时直接导航到该地址。因此在线模式需要联网，页面变化也会随网站实时变化。Linux Runtime 会将 `http_proxy`、`https_proxy`、`all_proxy` 和 `no_proxy`（同时兼容大写形式）传递给 WebKitGTK。
 
 ### 运行阶段
 
 1. 程序从自身末尾读取 `LWWEB002` Footer；没有 Footer 时显示当前平台的打包器界面，有 Footer 时进入生成应用模式，同时仍可读取旧版 `LWWEB001`。
-2. Runner 检查所有偏移和长度是否位于当前 PE/ELF 文件内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。校验失败时拒绝打开嵌入内容。
+2. Runner 检查所有偏移和长度是否位于当前 PE/ELF 文件内，限制 Manifest 大小，并计算资源 ZIP 与 Manifest 的联合 SHA-256。Windows 签名包还要求 Footer 摘要与受 PE 签名保护的 `LWWEB_BINDING` 一致，并通过 WinVerifyTrust；任一校验失败都会拒绝打开嵌入内容。
 3. 本地模式只读取 ZIP 中央目录建立索引，不会把网站完整解压到磁盘或一次性载入内存。
 4. Runner 先通过 Windows Named Mutex 或 Linux `flock` 获取 `app_id` 专属单实例锁，再在 `127.0.0.1` 的稳定首选端口启动 HTTP 服务。服务严格检查 Host，按请求解压单个资源、设置 MIME 类型，并在需要时提供 SPA fallback；首选端口被无关进程占用时会尝试确定性的备用端口并写入日志。
 5. 如果 Manifest 启用了 `backend_proxy`，本地服务会在静态资源之前匹配 `/__lw_proxy__/`。它只向固定 `origin` 转发 GET、HEAD、POST、PUT、PATCH、DELETE 和 OPTIONS，保留查询参数及请求体，并改写 Cookie 与同源重定向；网页不会直接连接局域网后台。
@@ -276,7 +278,8 @@ lw.Web2App.exe pack-url https://example.com .\Example.exe --title "在线应用"
 
 ### 检查生成的 EXE
 
-`inspect` 会验证 Payload SHA-256 并输出 Manifest：
+`inspect` 会验证 Payload SHA-256 并输出 Manifest；Windows 签名包还会同时验证
+`LWWEB_BINDING` 和 Authenticode：
 
 ```powershell
 lw.Web2App.exe inspect .\MyApp.exe
@@ -309,6 +312,23 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--company`：写入公司名称。
 - `--version`：写入文件和产品版本；支持 1 至 4 段数字并补齐为四段式。
 - `--copyright`：写入版权信息。
+
+### Windows Authenticode 签名
+
+第一版只使用 Windows Certificate Store 中已经安装且带私钥的代码签名证书，不在命令行接收 PFX 文件或密码：
+
+```powershell
+lw.Web2App.exe pack .\dist .\MyApp.exe `
+  --title "我的应用" `
+  --sign-cert-thumbprint 00112233445566778899AABBCCDDEEFF00112233 `
+  --timestamp-url https://timestamp.example.com
+```
+
+- `--sign-cert-thumbprint`：启用签名，并指定证书 SHA-1 指纹；空格会被忽略。
+- `--timestamp-url`：可选 RFC 3161 时间戳服务，只允许 `http://` 或 `https://`。
+- `--signtool`：可选 SignTool 完整路径；省略时依次搜索 `PATH` 和已安装 Windows SDK 的最新 x64 版本。
+
+签名流程会先清除模板 EXE 的旧 Certificate Table，再写 PE 元数据和带摘要的 `LWWEB_BINDING`，追加已经参与摘要计算的 Payload，最后对完整 EXE 签名。Runtime 会识别 SignTool 在文件末尾写入的 Certificate Table，并从它之前安全定位 Footer，形成“证书 → PE Binding → Payload”的完整校验链。没有指定证书时仍生成普通未签名 EXE，同时明确删除模板中继承的签名和 Binding。
 
 已经生成的 EXE 也可继续执行 CLI 打包命令。程序只会复制原始 Runner 前缀，不会嵌套旧 Payload。
 
@@ -371,7 +391,7 @@ if (state.exists) {
 ## Payload V2 格式
 
 打包器会先构建 `PreparedPayload`：ZIP 资源、只序列化一次的 Manifest
-原始字节及其联合 SHA-256 都在修改 Runner 之前确定。后续 PE 元数据处理以及未来的
+原始字节及其联合 SHA-256 都在修改 Runner 之前确定。后续 PE 元数据处理以及
 Authenticode 签名不会重新生成 Manifest；最后写入 EXE 的仍是参与摘要计算的同一份
 ZIP 和 Manifest 字节。这一分层为 Signed Payload Binding 提供稳定摘要，同时保持
 现有 `LWWEB002` Footer 格式不变。
@@ -395,15 +415,12 @@ Footer             固定 80 字节
 
 ### Signed Payload Binding
 
-Windows 新生成应用还会把同一个 Payload SHA-256 写入 PE 的
-`LWWEB_BINDING` 资源。该资源采用固定 48 字节的 `LWBIND01` 二进制格式，
-Runtime 启动时会先验证 `ZIP + Manifest` 与 Footer，再验证 PE Binding 中的摘要
-与 Footer 一致。没有 Binding 的旧应用仍然兼容；损坏、未知版本、未知安全标志或
-摘要不一致都会拒绝启动。
-
-当前阶段的 Binding 尚未设置“必须 Authenticode”标志，因此它建立了稳定的
-Payload 绑定机制，但还不能单独证明发布者身份。下一阶段完成 Authenticode 后，
-该 PE 资源会受到代码签名保护，从而形成“证书 → PE Binding → Payload”的完整信任链。
+Windows 签名应用会把同一个 Payload SHA-256 写入 PE 的 `LWWEB_BINDING`
+资源。该资源采用固定 48 字节的 `LWBIND01` 二进制格式并设置“必须
+Authenticode”标志。Runtime 启动时先验证 `ZIP + Manifest` 与 Footer，再验证
+Binding 摘要与 Footer 一致，最后调用 WinVerifyTrust 验证保护该 PE 资源的签名，
+形成“证书 → PE Binding → Payload”的完整信任链。没有 Binding 的旧应用和普通
+未签名应用仍然兼容；损坏、未知版本、未知安全标志、摘要不一致或签名失效都会拒绝启动。
 
 ## 安全边界
 
@@ -416,7 +433,7 @@ Payload 绑定机制，但还不能单独证明发布者身份。下一阶段完
 - HTTP 服务仅绑定 IPv4 loopback，且必须提供精确的应用专属端口 Host。
 - 后台代理只接受 Manifest 固定的 `http://` Origin；拒绝任意 URL、跨站来源、跨 Host 重定向和与代理前缀冲突的 ZIP 资源，并限制请求/响应大小与超时。
 - Native IPC 默认关闭，只支持本地打包模式；Capability、精确 Origin、固定根目录和临时目录授权会在 Native 侧强制执行。
-- SHA-256 可以检测损坏或修改，但不能验证发布者身份；数字签名属于后续规划。
+- SHA-256 可以检测损坏或修改，但不能验证发布者身份；需要发布者身份时应使用 Windows CLI 的 Authenticode 选项并妥善保护代码签名私钥。
 
 ## 项目结构
 
@@ -441,9 +458,9 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 2. Ubuntu 22.04、24.04 使用 Ninja、GTK3、WebKitGTK 4.1 和 OpenSSL 构建并测试 Linux x64。
 3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
 4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
-5. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
-6. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact。
-7. 对 `v*` 标签汇总所有平台产物到 GitHub Release。
+5. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
+6. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
+7. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
 
 ## 第三方依赖
 
@@ -472,10 +489,8 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 其他后续方向：
 
 - 多分辨率图标生成
-- Authenticode 代码签名
 - 托盘、第二次启动时前置已有窗口和窗口置顶
 - 外部链接策略
-- JS 与 C++ 双向 IPC
 - 自定义 User-Agent、启动参数和 CSP
 
 ## 联系与支持
