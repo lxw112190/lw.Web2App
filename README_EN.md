@@ -234,7 +234,7 @@ If they are absent, CMake downloads pinned versions. Set `-DLWWEB_DEPS_CACHE=<di
 
 ## Project Configuration: `lwweb.json`
 
-The repository now has a strict `schema: 1` project model that will be the single input to the next-stage `publish` command. It describes web input, application identity, window/runtime behavior, and publication targets. It is not the Runtime Manifest embedded in generated applications, and the existing `pack`, `pack-url`, and `inspect` commands remain unchanged.
+The repository has a strict `schema: 1` project model consumed as the single input to the `publish` command. It describes web input, application identity, window/runtime behavior, and publication targets. It is not the Runtime Manifest embedded in generated applications, and the existing `pack`, `pack-url`, and `inspect` commands remain unchanged.
 
 ```json
 {
@@ -281,6 +281,29 @@ The repository now has a strict `schema: 1` project model that will be the singl
 ```
 
 Relative paths such as `web.source`, `app.icon`, `publish.output`, `signtool`, and `iscc` are always resolved against the directory containing `lwweb.json`, never the shell's current directory. The parser rejects unknown fields, files over 1 MiB, invalid versions/manifests/capabilities, and secret-bearing fields such as `password`, `token`, `secret`, or PFX settings. A config may contain only a certificate thumbprint and timestamp URL, never a certificate password. The repository includes a complete example at `examples/project-config/lwweb.json`.
+
+### Build a Release Directory with One Command
+
+```powershell
+# Reads lwweb.json from the current directory by default
+lw.Web2App.exe publish
+
+# An explicit --output overrides the project configuration
+lw.Web2App.exe publish --config .\config\lwweb.json --output .\release
+```
+
+Windows produces a portable EXE and ZIP by default. Ubuntu produces an executable and `tar.gz`. Every version gets an isolated directory plus `SHA256SUMS.txt` and a machine-readable `RELEASE_INFO.json`:
+
+```text
+release/
+└── MyApp-1.2.0-windows-x64/
+    ├── MyApp.exe
+    ├── MyApp-1.2.0-windows-x64.zip
+    ├── SHA256SUMS.txt
+    └── RELEASE_INFO.json
+```
+
+Publishing completes packaging, compression, and SHA-256 generation in a hidden staging directory under the output root, then replaces the same-version directory only after every stage succeeds. A failure removes incomplete files and preserves the previous release. `publish.output` in the project file is relative to that file, while an explicit CLI `--output` is relative to the current working directory. Application installers and application-specific DEBs are not generated in this stage; enabling `publish.windows.installer.enabled` or `publish.linux.deb` therefore reports a clear error instead of silently omitting an artifact.
 
 ## CLI
 
@@ -465,7 +488,7 @@ src/packer/    Manifest, payload, and packer
 src/runtime/   ZIP resource access, LRU cache, local HTTP server, and controlled backend proxy
 src/ipc/       Cross-platform IPC protocol, capabilities, path permissions, and dispatch
 src/pe/        Icon/version resources, Payload Binding, and Authenticode
-src/publish/   lwweb.json project/publish configuration parsing (Publisher follows in stages)
+src/publish/   lwweb.json parsing, atomic publishing, archives, checksums, and release metadata
 src/common/    File, path, and SHA-256 utilities
 tests/         Unit and packaging/resource integration tests
 ```
@@ -478,6 +501,7 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 2. Builds and tests Linux x64 with Ninja, GTK3, WebKitGTK 4.1, and OpenSSL on Ubuntu 22.04 and 24.04.
 3. Builds the `wechat-article-formatter` Vite bundle in all platform jobs.
 4. Generates a Windows EXE or Linux ELF and validates its payload with `inspect`.
+5. Runs `publish` smoke tests on Windows and Ubuntu and validates the ZIP/tar.gz, `SHA256SUMS.txt`, and `RELEASE_INFO.json`.
 5. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
 6. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
 7. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.

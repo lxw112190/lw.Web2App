@@ -121,6 +121,8 @@ add_library(lwweb_core STATIC
   src/packer/packer.cpp
   src/pe/payload_binding.cpp
   src/publish/publish_config.cpp
+  src/publish/publisher.cpp
+  src/publish/release_info.cpp
   src/runtime/resource_cache.cpp
   src/runtime/backend_proxy.cpp
   src/runtime/proxy_stream.cpp
@@ -209,9 +211,11 @@ if(BUILD_TESTING)
     tests/payload_tests.cpp
     tests/path_tests.cpp
     tests/publish_config_tests.cpp
+    tests/publisher_tests.cpp
     tests/resource_tests.cpp
     tests/signing_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)
+  target_include_directories(lwweb_tests SYSTEM PRIVATE ${miniz_SOURCE_DIR})
   target_link_libraries(lwweb_tests PRIVATE lwweb_core)
   if(MSVC)
     target_compile_definitions(lwweb_tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _WIN32_WINNT=0x0A00)

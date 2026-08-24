@@ -7,6 +7,7 @@ void RunPayloadBindingTests();
 void RunPayloadTests();
 void RunPathTests();
 void RunPublishConfigTests();
+void RunPublisherTests();
 void RunResourceTests();
 void RunSigningTests();
 
@@ -19,6 +20,7 @@ int main() {
     RunPayloadTests();
     RunPathTests();
     RunPublishConfigTests();
+    RunPublisherTests();
     RunResourceTests();
     RunSigningTests();
     std::cout << "All tests passed\n";

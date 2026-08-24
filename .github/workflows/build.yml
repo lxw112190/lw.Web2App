@@ -124,6 +124,42 @@ jobs:
             throw "Native IPC example inspection failed"
           }
 
+      - name: Smoke test project publish
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packer = (Resolve-Path 'build/Release/lw.Web2App.exe').Path
+          $output = Join-Path $PWD 'build/project-publish-smoke'
+          $publish = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+            -ArgumentList @(
+              'publish', '--config',
+              (Resolve-Path 'examples/project-config/lwweb.json').Path,
+              '--output', $output
+            )
+          if ($publish.ExitCode -ne 0) { throw 'Project publish failed' }
+          $release = Get-ChildItem $output -Directory |
+            Where-Object Name -NotLike '.lwweb-*' | Select-Object -First 1
+          if (-not $release) { throw 'Published release directory is missing' }
+          Push-Location $release.FullName
+          try {
+            foreach ($line in Get-Content SHA256SUMS.txt) {
+              if ($line -notmatch '^([0-9a-f]{64})  (.+)$') {
+                throw "Invalid checksum line: $line"
+              }
+              $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $Matches[2]).Hash.ToLower()
+              if ($actual -ne $Matches[1]) { throw "Checksum mismatch: $($Matches[2])" }
+            }
+            $metadata = Get-Content RELEASE_INFO.json | ConvertFrom-Json
+            if ($metadata.format -ne 'lw-web2app-release' -or
+                $metadata.artifacts.Count -ne 2) {
+              throw 'Invalid release metadata'
+            }
+            Expand-Archive -LiteralPath $metadata.artifacts[1].file `
+              -DestinationPath ../zip-check -Force
+          } finally {
+            Pop-Location
+          }
+
       - name: Verify Authenticode signed and unsigned repackaging
         shell: pwsh
         run: |
@@ -331,6 +367,21 @@ jobs:
             dist/lw.Web2App/examples/native-ipc-manifest.json
           grep -q '"app.info"' \
             dist/lw.Web2App/examples/native-ipc-manifest.json
+
+      - name: Smoke test project publish
+        run: |
+          set -euo pipefail
+          ./build/lw.Web2App publish \
+            --config examples/project-config/lwweb.json \
+            --output build/project-publish-smoke
+          release=$(find build/project-publish-smoke -mindepth 1 -maxdepth 1 \
+            -type d ! -name '.lwweb-*' -print -quit)
+          test -n "$release"
+          (cd "$release" && sha256sum -c SHA256SUMS.txt)
+          test "$(find "$release" -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 1
+          tar -tzf "$release"/*.tar.gz | grep -q '^Native IPC Example$'
+          grep -q '"format": "lw-web2app-release"' "$release/RELEASE_INFO.json"
+          grep -q '"platform": "linux"' "$release/RELEASE_INFO.json"
 
       - name: Prepare Linux distributions
         run: |

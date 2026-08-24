@@ -149,6 +149,28 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Linux).find(
             "--sign-cert-thumbprint") == std::string::npos,
         "Linux help does not advertise Windows Authenticode options");
+  const auto publish_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "publish", "--config", "config/lwweb.json",
+       "--output", "dist/release"},
+      "runner.exe");
+  Check(publish_command.action == lwweb::CliAction::Publish &&
+            publish_command.publish.config_file ==
+                std::filesystem::path("config/lwweb.json") &&
+            publish_command.publish.output_override ==
+                std::filesystem::path("dist/release"),
+        "publish command and explicit paths parsed");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("publish") !=
+            std::string::npos,
+        "help includes project publish command");
+  bool unknown_publish_option_rejected = false;
+  try {
+    (void)lwweb::ParseCommandLine(
+        {"lw.Web2App", "publish", "--unknown", "value"}, "runner.exe");
+  } catch (...) {
+    unknown_publish_option_rejected = true;
+  }
+  Check(unknown_publish_option_rejected,
+        "publish rejects unknown options instead of ignoring mistakes");
   Check(lwweb::NormalizePeVersion(L"1.2.3") == L"1.2.3.0",
         "PE version helper pads missing components");
   bool invalid_version_rejected = false;

@@ -78,6 +78,28 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
     return command;
   }
 
+  if (args[1] == "publish") {
+    command.action = CliAction::Publish;
+    command.publish.runner = runner;
+#ifdef _WIN32
+    command.publish.platform = PublishPlatform::Windows;
+#else
+    command.publish.platform = PublishPlatform::Linux;
+#endif
+    for (std::size_t index = 2; index < args.size(); ++index) {
+      const auto& argument = args[index];
+      if (argument != "--config" && argument != "--output")
+        throw Error("Unknown publish option: " + argument);
+      if (++index == args.size() || args[index].rfind("--", 0) == 0)
+        throw Error("Missing value for " + argument);
+      if (argument == "--config")
+        command.publish.config_file = std::filesystem::u8path(args[index]);
+      else
+        command.publish.output_override = std::filesystem::u8path(args[index]);
+    }
+    return command;
+  }
+
   if (args[1] != "pack" && args[1] != "pack-url")
     throw Error("Unknown command; run with --help");
   if (args.size() < 4) throw Error(args[1] + " requires an input and output path");
@@ -163,6 +185,8 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "  " << executable << " pack-url <url> <" << application
        << "> [--title App] [--product-name App] [--file-description Description]\n"
        << "             [--app-id com.example.app] [--windowed]\n"
+       << "  " << executable
+       << " publish [--config ./lwweb.json] [--output ./release]\n"
        << "  " << executable << " inspect <application>\n";
   return help.str();
 }
@@ -181,6 +205,16 @@ int RunCommandLine(const std::vector<std::string>& args,
     VerifyPePayloadBinding(command.inspect_target, payload.footer.sha256);
 #endif
     output << SerializeManifest(payload.manifest, true) << '\n';
+    return 0;
+  }
+  if (command.action == CliAction::Publish) {
+    command.publish.platform = platform == CliPlatform::Windows
+                                   ? PublishPlatform::Windows
+                                   : PublishPlatform::Linux;
+    command.publish.progress =
+        [&output](const std::string& message) { output << message << '\n'; };
+    const auto result = PublishProject(command.publish);
+    output << "Published release: " << result.directory.u8string() << '\n';
     return 0;
   }
   command.pack.progress = [&output](const std::string& message) { output << message << '\n'; };

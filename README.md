@@ -241,7 +241,7 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
 
 ## 项目配置 `lwweb.json`
 
-仓库已经提供严格的 `schema: 1` 项目配置模型，为下一阶段的 `publish` 命令提供唯一输入。它描述网页来源、应用身份、窗口、Runtime 和发布目标，不是写入生成应用内部的 Runtime Manifest；现有 `pack`、`pack-url` 和 `inspect` 命令保持不变。
+仓库已经提供严格的 `schema: 1` 项目配置模型，并由 `publish` 命令作为唯一输入。它描述网页来源、应用身份、窗口、Runtime 和发布目标，不是写入生成应用内部的 Runtime Manifest；现有 `pack`、`pack-url` 和 `inspect` 命令保持不变。
 
 ```json
 {
@@ -288,6 +288,29 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
 ```
 
 `web.source`、`app.icon`、`publish.output`、`signtool` 和 `iscc` 等相对路径始终以 `lwweb.json` 所在目录为基准，而不是当前终端目录。解析器拒绝未知字段、超过 1 MiB 的配置、非法版本/Manifest/Capability 以及 `password`、`token`、`secret`、PFX 等敏感字段；配置文件只允许保存证书指纹和时间戳 URL，不能保存证书密码。仓库中的 `examples/project-config/lwweb.json` 是完整示例。
+
+### 一条命令生成发布目录
+
+```powershell
+# 默认读取当前目录的 lwweb.json
+lw.Web2App.exe publish
+
+# 指定项目配置；--output 的优先级高于配置文件
+lw.Web2App.exe publish --config .\config\lwweb.json --output .\release
+```
+
+Windows 默认生成 Portable EXE 与 ZIP，Ubuntu 默认生成可执行文件与 `tar.gz`。每个版本拥有独立目录，并同时生成 `SHA256SUMS.txt` 和机器可读的 `RELEASE_INFO.json`：
+
+```text
+release/
+└── MyApp-1.2.0-windows-x64/
+    ├── MyApp.exe
+    ├── MyApp-1.2.0-windows-x64.zip
+    ├── SHA256SUMS.txt
+    └── RELEASE_INFO.json
+```
+
+发布过程先在输出目录内的隐藏暂存目录完成打包、压缩和 SHA-256 计算，全部成功后才整体替换同版本目录；中途失败会清理半成品并保留原发布结果。配置文件中的 `publish.output` 仍以配置文件目录为基准，显式 `--output` 则以当前终端目录为基准。当前阶段尚未生成应用安装器或应用专属 DEB，因此启用 `publish.windows.installer.enabled` 或 `publish.linux.deb` 会明确报错，而不会静默漏掉产物。
 
 ## CLI 使用方法
 
@@ -496,7 +519,7 @@ src/packer/    Manifest、Payload 和打包器
 src/runtime/   ZIP 资源读取、LRU、本地 HTTP 服务和受控后台代理
 src/ipc/       跨平台 IPC 协议、Capability、路径权限和方法调度
 src/pe/        图标、版本资源、Payload Binding 和 Authenticode
-src/publish/   lwweb.json 项目/发布配置解析（Publisher 按阶段继续实现）
+src/publish/   lwweb.json 解析、原子发布、压缩包、校验和与 Release 清单
 src/common/    文件、路径和 SHA-256 工具
 tests/         单元测试与打包/读取集成测试
 ```
@@ -508,6 +531,7 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 1. Windows 2022 使用 VS2022 构建和测试 Windows x64。
 2. Ubuntu 22.04、24.04 使用 Ninja、GTK3、WebKitGTK 4.1 和 OpenSSL 构建并测试 Linux x64。
 3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
+4. Windows 与 Ubuntu 都执行 `publish` 冒烟测试，并校验 ZIP/tar.gz、`SHA256SUMS.txt` 和 `RELEASE_INFO.json`。
 4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
 5. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
 6. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
