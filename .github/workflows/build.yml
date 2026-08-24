@@ -189,23 +189,81 @@ jobs:
 
       - name: Verify Authenticode signed and unsigned repackaging
         shell: pwsh
-        timeout-minutes: 5
+        # This step signs three artifacts. Each native SignTool call has its own
+        # two-minute fail-fast timeout, so the job-level budget must be larger
+        # than their combined worst case plus packaging and verification.
+        timeout-minutes: 10
         run: |
           $ErrorActionPreference = "Stop"
           Write-Host "=== 1/8 Create and trust the CI code-signing certificate ==="
-          $certificate = New-SelfSignedCertificate -Type CodeSigningCert `
-            -Subject 'CN=lw.Web2App CI Test' `
-            -CertStoreLocation 'Cert:\CurrentUser\My' `
-            -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256 `
-            -NotAfter (Get-Date).AddDays(1)
+          $certificate = $null
+          $trustedCertificate = $null
+          $rsa = $null
           $trustedStores = @('Root', 'TrustedPublisher')
           try {
+            # New-SelfSignedCertificate and adding a certificate that still owns
+            # its private key to Root can wait for a provider/UI interaction on a
+            # headless hosted runner. Build the short-lived certificate in memory,
+            # persist the private key only in CurrentUser\My, and trust a public-only
+            # copy. This keeps the signing smoke test deterministic and non-interactive.
+            Write-Host "Generating an in-memory RSA code-signing certificate"
+            $rsa = [System.Security.Cryptography.RSA]::Create(2048)
+            $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+              'CN=lw.Web2App CI Test',
+              $rsa,
+              [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+              [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+            $enhancedKeyUsages = `
+              [System.Security.Cryptography.OidCollection]::new()
+            [void]$enhancedKeyUsages.Add(
+              [System.Security.Cryptography.Oid]::new(
+                '1.3.6.1.5.5.7.3.3', 'Code Signing'))
+            [void]$request.CertificateExtensions.Add(
+              [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new(
+                $enhancedKeyUsages, $false))
+            [void]$request.CertificateExtensions.Add(
+              [System.Security.Cryptography.X509Certificates.X509KeyUsageExtension]::new(
+                [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature,
+                $true))
+            [void]$request.CertificateExtensions.Add(
+              [System.Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new(
+                $request.PublicKey, $false))
+            $generatedCertificate = $request.CreateSelfSigned(
+              [DateTimeOffset]::UtcNow.AddMinutes(-5),
+              [DateTimeOffset]::UtcNow.AddDays(1))
+            try {
+              $pfxPassword = [Guid]::NewGuid().ToString('N')
+              $pfx = $generatedCertificate.Export(
+                [System.Security.Cryptography.X509Certificates.X509ContentType]::Pfx,
+                $pfxPassword)
+            } finally {
+              $generatedCertificate.Dispose()
+            }
+            $keyFlags = `
+              [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::UserKeySet -bor `
+              [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::PersistKeySet -bor `
+              [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+            $certificate = `
+              [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $pfx, $pfxPassword, $keyFlags)
+            $personalStore = `
+              [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                'My', 'CurrentUser')
+            $personalStore.Open('ReadWrite')
+            try { $personalStore.Add($certificate) } finally { $personalStore.Close() }
+            $trustedCertificate = `
+              [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
+                $certificate.Export(
+                  [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
+            Write-Host "Certificate generated: $($certificate.Thumbprint)"
             foreach ($storeName in $trustedStores) {
+              Write-Host "Trusting the public certificate in CurrentUser\$storeName"
               $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
                 $storeName, 'CurrentUser')
               $store.Open('ReadWrite')
-              try { $store.Add($certificate) } finally { $store.Close() }
+              try { $store.Add($trustedCertificate) } finally { $store.Close() }
             }
+            Write-Host "CI code-signing certificate is ready"
 
             $packer = (Resolve-Path 'build/Release/lw.Web2App.exe').Path
             $signTool = Get-ChildItem `
@@ -325,14 +383,21 @@ jobs:
               throw 'Release metadata did not record the signed Installer'
             }
           } finally {
-            foreach ($storeName in $trustedStores) {
-              $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-                $storeName, 'CurrentUser')
-              $store.Open('ReadWrite')
-              try { $store.Remove($certificate) } finally { $store.Close() }
+            if ($trustedCertificate) {
+              foreach ($storeName in $trustedStores) {
+                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
+                  $storeName, 'CurrentUser')
+                $store.Open('ReadWrite')
+                try { $store.Remove($trustedCertificate) } finally { $store.Close() }
+              }
             }
-            Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
-              -Force -ErrorAction SilentlyContinue
+            if ($certificate) {
+              Remove-Item "Cert:\CurrentUser\My\$($certificate.Thumbprint)" `
+                -Force -ErrorAction SilentlyContinue
+              $certificate.Dispose()
+            }
+            if ($trustedCertificate) { $trustedCertificate.Dispose() }
+            if ($rsa) { $rsa.Dispose() }
           }
 
       - name: Prepare distribution
