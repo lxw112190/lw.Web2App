@@ -200,6 +200,26 @@ jobs:
           $trustedCertificate = $null
           $rsa = $null
           $trustedStores = @('Root', 'TrustedPublisher')
+          function Invoke-CertUtil {
+            param(
+              [Parameter(Mandatory = $true)] [string[]] $Arguments,
+              [Parameter(Mandatory = $true)] [string] $Operation
+            )
+            $certUtil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+            $process = Start-Process -FilePath $certUtil -PassThru -NoNewWindow `
+              -ArgumentList $Arguments
+            try {
+              if (-not $process.WaitForExit(30000)) {
+                Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+                throw "$Operation timed out after 30 seconds"
+              }
+              if ($process.ExitCode -ne 0) {
+                throw "$Operation failed with exit code $($process.ExitCode)"
+              }
+            } finally {
+              $process.Dispose()
+            }
+          }
           try {
             # New-SelfSignedCertificate and adding a certificate that still owns
             # its private key to Root can wait for a provider/UI interaction on a
@@ -256,12 +276,20 @@ jobs:
                 $certificate.Export(
                   [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
             Write-Host "Certificate generated: $($certificate.Thumbprint)"
+            $signingSmokeDirectory = Join-Path $PWD 'build/signing-smoke'
+            New-Item -ItemType Directory -Force $signingSmokeDirectory | Out-Null
+            $publicCertificatePath = `
+              Join-Path $signingSmokeDirectory 'ci-code-signing.cer'
+            [System.IO.File]::WriteAllBytes(
+              $publicCertificatePath,
+              $trustedCertificate.Export(
+                [System.Security.Cryptography.X509Certificates.X509ContentType]::Cert))
             foreach ($storeName in $trustedStores) {
               Write-Host "Trusting the public certificate in CurrentUser\$storeName"
-              $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-                $storeName, 'CurrentUser')
-              $store.Open('ReadWrite')
-              try { $store.Add($trustedCertificate) } finally { $store.Close() }
+              Invoke-CertUtil `
+                -Arguments @('-user', '-f', '-addstore', $storeName,
+                             $publicCertificatePath) `
+                -Operation "Adding CI certificate to CurrentUser\$storeName"
             }
             Write-Host "CI code-signing certificate is ready"
 
@@ -270,7 +298,6 @@ jobs:
               "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
               Sort-Object FullName -Descending | Select-Object -First 1
             if (-not $signTool) { throw 'Windows SDK SignTool was not found' }
-            New-Item -ItemType Directory -Force build/signing-smoke | Out-Null
             $source = (Resolve-Path 'examples/native-ipc').Path
             $signed = Join-Path $PWD 'build/signing-smoke/signed.exe'
             Write-Host "=== 2/8 Package and sign the Native IPC example ==="
@@ -383,12 +410,16 @@ jobs:
               throw 'Release metadata did not record the signed Installer'
             }
           } finally {
-            if ($trustedCertificate) {
+            if ($certificate) {
               foreach ($storeName in $trustedStores) {
-                $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(
-                  $storeName, 'CurrentUser')
-                $store.Open('ReadWrite')
-                try { $store.Remove($trustedCertificate) } finally { $store.Close() }
+                try {
+                  Invoke-CertUtil `
+                    -Arguments @('-user', '-delstore', $storeName,
+                                 $certificate.Thumbprint) `
+                    -Operation "Removing CI certificate from CurrentUser\$storeName"
+                } catch {
+                  Write-Warning $_
+                }
               }
             }
             if ($certificate) {
