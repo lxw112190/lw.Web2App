@@ -370,6 +370,12 @@ if (state.exists) {
 
 ## Payload V2 格式
 
+打包器会先构建 `PreparedPayload`：ZIP 资源、只序列化一次的 Manifest
+原始字节及其联合 SHA-256 都在修改 Runner 之前确定。后续 PE 元数据处理以及未来的
+Authenticode 签名不会重新生成 Manifest；最后写入 EXE 的仍是参与摘要计算的同一份
+ZIP 和 Manifest 字节。这一分层为 Signed Payload Binding 提供稳定摘要，同时保持
+现有 `LWWEB002` Footer 格式不变。
+
 ```text
 Runner PE / ELF
 Resource ZIP       在线 URL 模式为空

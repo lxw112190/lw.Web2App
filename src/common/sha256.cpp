@@ -125,6 +125,27 @@ Sha256Digest Sha256FileRange(const std::filesystem::path& path,
   return hash.Finish();
 }
 
+Sha256Digest Sha256FileWithSuffix(const std::filesystem::path& path,
+                                  const std::string& suffix) {
+  Hash hash;
+  if (!path.empty()) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input) throw Error("Cannot open file for hashing");
+    std::vector<std::uint8_t> buffer(1024 * 1024);
+    while (input) {
+      input.read(reinterpret_cast<char*>(buffer.data()),
+                 static_cast<std::streamsize>(buffer.size()));
+      const auto count = input.gcount();
+      if (count > 0)
+        hash.Update(buffer.data(), static_cast<std::size_t>(count));
+    }
+    if (!input.eof()) throw Error("Failed while hashing file");
+  }
+  hash.Update(reinterpret_cast<const std::uint8_t*>(suffix.data()),
+              suffix.size());
+  return hash.Finish();
+}
+
 std::string HexDigest(const Sha256Digest& digest) {
   std::ostringstream output;
   output << std::hex << std::setfill('0');

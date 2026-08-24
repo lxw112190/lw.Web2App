@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 
 namespace lwweb {
 
@@ -42,6 +43,18 @@ struct LoadedPayload {
   Manifest manifest;
 };
 
+// 在修改 Runner 之前准备好的不可变 Payload 描述。manifest_json 是参与
+// SHA-256 计算并最终写入 EXE 的同一份字节，禁止在追加阶段重新序列化。
+struct PreparedPayload {
+  std::filesystem::path zip;
+  std::string manifest_json;
+  Sha256Digest sha256{};
+  std::uint32_t flags = 0;
+  std::uint32_t file_count = 0;
+  std::uint64_t source_size = 0;
+  std::uint64_t compressed_size = 0;
+};
+
 std::array<std::uint8_t, kPayloadFooterSize> EncodeFooter(const PayloadFooter& footer);
 PayloadFooter DecodeFooter(const std::array<std::uint8_t, kPayloadFooterSize>& bytes);
 // 纯边界校验函数，供加载器、表驱动测试和 fuzz target 共同使用。
@@ -50,6 +63,10 @@ bool HasPayload(const std::filesystem::path& executable);
 LoadedPayload LoadPayload(const std::filesystem::path& executable,
                           bool verify_hash = true);
 std::uint64_t RunnerPrefixSize(const std::filesystem::path& executable);
+void AppendPreparedPayload(const std::filesystem::path& executable,
+                           const PreparedPayload& payload);
+// 兼容已有调用方的包装；新打包流程应先 PreparePayload，再调用
+// AppendPreparedPayload。
 void AppendPayload(const std::filesystem::path& output,
                    const std::filesystem::path& payload_file,
                    const Manifest& manifest, std::uint32_t flags);

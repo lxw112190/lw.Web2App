@@ -1,6 +1,7 @@
 #pragma once
 
 #include "lwweb/packer/manifest.h"
+#include "lwweb/packer/payload.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -40,6 +41,8 @@ struct PackOptions {
   std::function<void(const std::string&)> progress;
 };
 
+PreparedPayload PreparePayload(const PackOptions& options,
+                               Manifest manifest);
 void PackApplication(const PackOptions& options);
 
 }  // namespace lwweb

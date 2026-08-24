@@ -137,44 +137,77 @@ std::uint64_t RunnerPrefixSize(const std::filesystem::path& executable) {
   return DecodeFooter(ReadFooterBytes(executable)).payload_offset;
 }
 
-void AppendPayload(const std::filesystem::path& output,
-                   const std::filesystem::path& payload_file,
-                   const Manifest& input_manifest, std::uint32_t flags) {
+void AppendPreparedPayload(const std::filesystem::path& executable,
+                           const PreparedPayload& payload) {
+  if (payload.manifest_json.size() > 1024 * 1024)
+    throw Error("Manifest exceeds the 1 MiB limit");
+  const auto payload_size = payload.zip.empty() ? 0 : FileSize(payload.zip);
+  if (payload.compressed_size != 0 &&
+      payload.compressed_size != payload_size)
+    throw Error("Prepared ZIP size has changed");
+  if (Sha256FileWithSuffix(payload.zip, payload.manifest_json) != payload.sha256)
+    throw Error("Prepared payload content has changed");
+
   PayloadFooter footer;
-  footer.flags = flags;
-  footer.payload_offset = FileSize(output);
-  footer.payload_size = payload_file.empty() ? 0 : FileSize(payload_file);
-  auto manifest = input_manifest;
-  manifest.legacy_payload_sha256.clear();
-  const auto json = SerializeManifest(manifest);
+  footer.flags = payload.flags;
+  footer.payload_offset = FileSize(executable);
+  footer.payload_size = payload_size;
+  if (footer.payload_size >
+      (std::numeric_limits<std::uint64_t>::max)() - footer.payload_offset)
+    throw Error("Prepared payload size is too large");
   footer.manifest_offset = footer.payload_offset + footer.payload_size;
-  footer.manifest_size = json.size();
-  std::ofstream stream(output, std::ios::binary | std::ios::app);
+  footer.manifest_size = payload.manifest_json.size();
+  if (footer.manifest_size >
+      (std::numeric_limits<std::uint64_t>::max)() - footer.manifest_offset)
+    throw Error("Prepared manifest size is too large");
+  footer.sha256 = payload.sha256;
+
+  std::ofstream stream(executable, std::ios::binary | std::ios::app);
   if (!stream) throw Error("Cannot append application payload");
-  if (!payload_file.empty()) {
-    std::ifstream payload(payload_file, std::ios::binary);
-    if (!payload) throw Error("Cannot open temporary ZIP payload");
+  if (!payload.zip.empty()) {
+    std::ifstream zip(payload.zip, std::ios::binary);
+    if (!zip) throw Error("Cannot open prepared ZIP payload");
     std::vector<char> buffer(1024 * 1024);
     std::uint64_t remaining = footer.payload_size;
     while (remaining) {
       const auto count = static_cast<std::size_t>((std::min)(
           remaining, static_cast<std::uint64_t>(buffer.size())));
-      payload.read(buffer.data(), static_cast<std::streamsize>(count));
-      if (payload.gcount() != static_cast<std::streamsize>(count))
-        throw Error("Temporary ZIP payload is truncated");
+      zip.read(buffer.data(), static_cast<std::streamsize>(count));
+      if (zip.gcount() != static_cast<std::streamsize>(count))
+        throw Error("Prepared ZIP payload is truncated");
       stream.write(buffer.data(), static_cast<std::streamsize>(count));
       remaining -= count;
     }
   }
-  stream.write(json.data(), static_cast<std::streamsize>(json.size()));
+  stream.write(payload.manifest_json.data(),
+               static_cast<std::streamsize>(payload.manifest_json.size()));
   stream.close();
   if (!stream) throw Error("Failed while writing application content");
-  footer.sha256 = Sha256FileRange(output, footer.payload_offset,
-                                  footer.payload_size + footer.manifest_size);
+  const auto appended_digest = Sha256FileRange(
+      executable, footer.payload_offset,
+      footer.payload_size + footer.manifest_size);
+  if (appended_digest != footer.sha256)
+    throw Error("Appended payload does not match the prepared digest");
   const auto footer_bytes = EncodeFooter(footer);
-  std::ofstream footer_stream(output, std::ios::binary | std::ios::app);
+  std::ofstream footer_stream(executable, std::ios::binary | std::ios::app);
   footer_stream.write(reinterpret_cast<const char*>(footer_bytes.data()), footer_bytes.size());
   if (!footer_stream) throw Error("Failed while writing application payload");
+}
+
+void AppendPayload(const std::filesystem::path& output,
+                   const std::filesystem::path& payload_file,
+                   const Manifest& input_manifest, std::uint32_t flags) {
+  auto manifest = input_manifest;
+  manifest.legacy_payload_sha256.clear();
+  PreparedPayload prepared;
+  prepared.zip = payload_file;
+  prepared.manifest_json = SerializeManifest(manifest);
+  prepared.sha256 = Sha256FileWithSuffix(prepared.zip,
+                                         prepared.manifest_json);
+  prepared.flags = flags;
+  prepared.compressed_size =
+      prepared.zip.empty() ? 0 : FileSize(prepared.zip);
+  AppendPreparedPayload(output, prepared);
 }
 
 }  // namespace lwweb

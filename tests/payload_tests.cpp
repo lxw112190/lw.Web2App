@@ -253,6 +253,73 @@ void RunPayloadTests() {
     std::ofstream previous(pack.output, std::ios::binary);
     previous << "previous application";
   }
+
+  // Payload 先于 Runner 组装完成，签名阶段因此可以稳定取得最终摘要。
+  // AppendPreparedPayload 必须写入参与摘要计算的同一份 Manifest 字节。
+  const auto prepared = lwweb::PreparePayload(pack, pack.manifest);
+  Check(prepared.file_count == 2 && prepared.source_size > 0 &&
+            prepared.compressed_size == std::filesystem::file_size(prepared.zip),
+        "prepared payload exposes ZIP statistics before executable assembly");
+  Check(prepared.sha256 ==
+            lwweb::Sha256FileWithSuffix(prepared.zip, prepared.manifest_json),
+        "prepared payload digest covers exact ZIP and manifest bytes");
+  Check((prepared.flags & lwweb::kPayloadHasZip) != 0,
+        "prepared local payload records the ZIP flag");
+
+  const auto prepared_output = base / "prepared.exe";
+  const auto compatibility_output = base / "compatibility.exe";
+  {
+    std::ofstream prepared_runner(prepared_output, std::ios::binary);
+    prepared_runner << "MZ prepared runner";
+  }
+  std::filesystem::copy_file(prepared_output, compatibility_output);
+  lwweb::AppendPreparedPayload(prepared_output, prepared);
+  lwweb::AppendPayload(compatibility_output, prepared.zip, pack.manifest,
+                       prepared.flags);
+  Check(lwweb::ReadFileBytes(prepared_output) ==
+            lwweb::ReadFileBytes(compatibility_output),
+        "prepared and compatibility append APIs produce identical LWWEB002 bytes");
+  const auto prepared_loaded = lwweb::LoadPayload(prepared_output);
+  Check(prepared_loaded.footer.sha256 == prepared.sha256 &&
+            prepared_loaded.manifest.title == pack.manifest.title,
+        "prepared payload round-trips through the existing V2 loader");
+
+  auto changed = prepared;
+  changed.zip = base / "changed-payload.zip";
+  std::filesystem::copy_file(prepared.zip, changed.zip);
+  {
+    std::ofstream stream(changed.zip, std::ios::binary | std::ios::app);
+    stream << 'x';
+  }
+  const auto changed_output = base / "changed.exe";
+  {
+    std::ofstream changed_runner(changed_output, std::ios::binary);
+    changed_runner << "MZ changed runner";
+  }
+  bool changed_payload_rejected = false;
+  try {
+    lwweb::AppendPreparedPayload(changed_output, changed);
+  } catch (...) {
+    changed_payload_rejected = true;
+  }
+  Check(changed_payload_rejected,
+        "prepared payload mutation is rejected before footer publication");
+
+  lwweb::PackOptions url_options;
+  url_options.output = base / "url-prepared.exe";
+  lwweb::Manifest url_manifest;
+  url_manifest.mode = lwweb::AppMode::Url;
+  url_manifest.url = "https://example.com/app";
+  const auto prepared_url = lwweb::PreparePayload(url_options, url_manifest);
+  Check(prepared_url.zip.empty() &&
+            (prepared_url.flags & lwweb::kPayloadUrlMode) != 0 &&
+            prepared_url.sha256 == lwweb::Sha256(
+                reinterpret_cast<const std::uint8_t*>(
+                    prepared_url.manifest_json.data()),
+                prepared_url.manifest_json.size()),
+        "URL mode prepares a manifest-only LWWEB002 payload");
+  std::filesystem::remove(prepared.zip, ignored);
+
   lwweb::PackApplication(pack);
   const auto loaded = lwweb::LoadPayload(pack.output);
   backend.Listen();

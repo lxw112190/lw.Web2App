@@ -576,7 +576,10 @@ std::wstring LocalizeProgress(const std::string& message) {
   if (message == "Writing PE metadata" || message == "Writing platform metadata")
     return L"正在写入图标和版本信息…";
   if (message == "Compressing static resources") return L"正在压缩网页资源…";
-  if (message == "Appending payload and SHA-256") return L"正在写入 Payload 并计算 SHA-256…";
+  if (message == "Preparing payload") return L"正在准备应用 Payload…";
+  if (message == "Appending payload and SHA-256" ||
+      message == "Appending prepared payload")
+    return L"正在写入已校验的 Payload…";
   if (message == "Publishing output") return L"正在发布最终应用…";
   if (message == "Done") return L"生成完成，可以运行目标 EXE。";
   return Utf8ToWide(message);

@@ -336,6 +336,13 @@ With IPC enabled, the Runtime accepts messages only from the exact current `127.
 
 ## Payload V2 Format
 
+The packer first creates a `PreparedPayload`: ZIP resources, the exact Manifest
+bytes serialized once, and their combined SHA-256 are finalized before the Runner
+is modified. Later PE metadata processing and future Authenticode signing never
+serialize the Manifest again; the exact ZIP and Manifest bytes covered by the
+prepared digest are appended to the executable. This separation provides a stable
+digest for Signed Payload Binding without changing the existing `LWWEB002` footer.
+
 ```text
 Runner PE / ELF
 Resource ZIP       empty in online URL mode

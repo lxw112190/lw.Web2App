@@ -199,6 +199,46 @@ void CopyRunnerPrefix(const std::filesystem::path& runner,
 
 }  // namespace
 
+PreparedPayload PreparePayload(const PackOptions& options,
+                               Manifest manifest) {
+  ValidateManifest(manifest);
+  if (manifest.mode == AppMode::Local) {
+    if (!IsCanonicalArchivePath(manifest.entry))
+      throw Error("Entry HTML path must be a canonical relative archive path");
+    if (!std::filesystem::is_directory(options.source_directory))
+      throw Error("Local mode requires a source directory");
+    const auto entry =
+        options.source_directory / std::filesystem::u8path(manifest.entry);
+    if (!std::filesystem::is_regular_file(entry))
+      throw Error("Entry HTML file does not exist");
+  }
+
+  PreparedPayload prepared;
+  try {
+    if (manifest.mode == AppMode::Local) {
+      const auto zip = BuildZip(options);
+      prepared.zip = zip.path;
+      prepared.file_count = zip.file_count;
+      prepared.source_size = zip.source_size;
+      prepared.compressed_size = zip.compressed_size;
+      prepared.flags |= kPayloadHasZip;
+    } else {
+      prepared.flags |= kPayloadUrlMode;
+    }
+    manifest.legacy_payload_sha256.clear();
+    prepared.manifest_json = SerializeManifest(manifest);
+    prepared.sha256 =
+        Sha256FileWithSuffix(prepared.zip, prepared.manifest_json);
+    return prepared;
+  } catch (...) {
+    auto temporary = options.output;
+    temporary += ".payload.tmp";
+    std::error_code ignored;
+    std::filesystem::remove(temporary, ignored);
+    throw;
+  }
+}
+
 void PackApplication(const PackOptions& options) {
   const auto started = std::chrono::steady_clock::now();
   Logger log;
@@ -251,6 +291,18 @@ void PackApplication(const PackOptions& options) {
     working.output = staging;
     log.Debug("Staging: " + staging.u8string());
 
+    phase = "Payload preparation";
+    Progress(options, manifest.mode == AppMode::Local
+                          ? "Compressing static resources"
+                          : "Preparing payload");
+    auto prepared = PreparePayload(working, manifest);
+    if (manifest.mode == AppMode::Local) {
+      log.Info("Files: " + std::to_string(prepared.file_count));
+      log.Info("Source size: " + HumanBytes(prepared.source_size));
+      log.Info("Compressed size: " + HumanBytes(prepared.compressed_size));
+    }
+    log.Info("Prepared Payload SHA-256: " + HexDigest(prepared.sha256));
+
     phase = "runner copy";
     Progress(options, "Copying runner");
     CopyRunnerPrefix(options.runner, staging);
@@ -270,25 +322,12 @@ void PackApplication(const PackOptions& options) {
     if (error) throw Error("Cannot make the generated Linux application executable");
     log.Info("Linux executable permissions updated successfully");
 #endif
-    ZipBuildResult zip;
-    std::uint32_t flags = 0;
-    if (options.manifest.mode == AppMode::Local) {
-      phase = "ZIP compression";
-      Progress(options, "Compressing static resources");
-      zip = BuildZip(working);
-      log.Info("Files: " + std::to_string(zip.file_count));
-      log.Info("Source size: " + HumanBytes(zip.source_size));
-      log.Info("Compressed size: " + HumanBytes(zip.compressed_size));
-      flags |= kPayloadHasZip;
-    } else {
-      flags |= kPayloadUrlMode;
-    }
-    phase = "Manifest, SHA-256 and Payload append";
-    Progress(options, "Appending payload and SHA-256");
-    AppendPayload(staging, zip.path, manifest, flags);
+    phase = "Prepared Payload append";
+    Progress(options, "Appending prepared payload");
+    AppendPreparedPayload(staging, prepared);
     const auto loaded = LoadPayload(staging);
     log.Info("Payload SHA-256: " + HexDigest(loaded.footer.sha256));
-    if (!zip.path.empty()) std::filesystem::remove(zip.path, error);
+    if (!prepared.zip.empty()) std::filesystem::remove(prepared.zip, error);
 
     phase = "atomic output publication";
     Progress(options, "Publishing output");
