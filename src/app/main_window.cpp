@@ -17,6 +17,7 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <cwctype>
@@ -32,6 +33,7 @@ namespace lwweb {
 namespace {
 
 constexpr wchar_t kClassName[] = L"lw.Web2App.Packer";
+constexpr wchar_t kIpcSettingsClassName[] = L"lw.Web2App.IpcSettings";
 constexpr wchar_t kProjectUrl[] = L"https://github.com/lxw112190/lw.Web2App";
 constexpr wchar_t kReleasesUrl[] = L"https://github.com/lxw112190/lw.Web2App/releases";
 constexpr int kClientWidth = 1120;
@@ -73,6 +75,9 @@ enum ControlId {
   kSpa,
   kLogging,
   kDebugLogging,
+  kIpcEnabled,
+  kIpcSettings,
+  kIpcSummary,
   kOutput,
   kBrowseOutput,
   kPack,
@@ -126,6 +131,9 @@ struct State {
   bool syncing_metadata = false;
   bool product_name_edited = false;
   bool file_description_edited = false;
+  bool ipc_enabled = false;
+  std::vector<std::string> ipc_capabilities;
+  std::vector<std::filesystem::path> ipc_filesystem_roots;
 };
 
 constexpr UINT kPackProgressMessage = WM_APP + 1;
@@ -297,14 +305,15 @@ void RefreshHtmlEntries(HWND window) {
   UpdateSuggestedStartPath(window);
 }
 
-std::filesystem::path PickFolder(HWND owner) {
+std::filesystem::path PickFolder(
+    HWND owner, const wchar_t* title = L"选择网页构建产物目录") {
   IFileDialog* dialog = nullptr;
   if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
                               IID_PPV_ARGS(&dialog)))) return {};
   DWORD options = 0;
   dialog->GetOptions(&options);
   dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM);
-  dialog->SetTitle(L"选择网页构建产物目录");
+  dialog->SetTitle(title);
   std::filesystem::path result;
   if (SUCCEEDED(dialog->Show(owner))) {
     IShellItem* item = nullptr;
@@ -334,6 +343,334 @@ std::filesystem::path PickFile(HWND owner, const wchar_t* title,
   value.lpstrDefExt = save ? L"exe" : nullptr;
   return (save ? GetSaveFileNameW(&value) : GetOpenFileNameW(&value))
              ? std::filesystem::path(buffer) : std::filesystem::path{};
+}
+
+enum IpcDialogControlId {
+  kIpcPresetReadOnly = 300,
+  kIpcPresetBrowse,
+  kIpcPresetManage,
+  kIpcRootList,
+  kIpcAddRoot,
+  kIpcRemoveRoot,
+  kIpcCapabilityFirst = 320,
+};
+
+// GUI 文案与 Manifest 能力名的唯一映射。界面只展示客户容易理解的名称，
+// 写入 Payload 时仍使用稳定的 Native IPC capability 标识。
+struct IpcCapabilityControl {
+  int id;
+  const wchar_t* label;
+  const char* capability;
+};
+
+constexpr std::array<IpcCapabilityControl, 8> kIpcCapabilityControls{{
+    {kIpcCapabilityFirst + 0, L"获取应用信息", "app.info"},
+    {kIpcCapabilityFirst + 1, L"选择本地文件", "dialog.file"},
+    {kIpcCapabilityFirst + 2, L"选择本地文件夹", "dialog.directory"},
+    {kIpcCapabilityFirst + 3, L"检查文件是否存在", "fs.exists"},
+    {kIpcCapabilityFirst + 4, L"浏览文件夹内容", "fs.list"},
+    {kIpcCapabilityFirst + 5, L"复制文件", "fs.copy"},
+    {kIpcCapabilityFirst + 6, L"移动文件", "fs.move"},
+    {kIpcCapabilityFirst + 7, L"删除文件（高风险）", "fs.delete"},
+}};
+
+// Native IPC 权限弹窗的临时状态。只有点击“保存”后才会回写主窗口，
+// 关闭或取消不会改变当前打包配置。
+struct IpcDialogState {
+  HWND window = nullptr;
+  State* owner_state = nullptr;
+  UINT dpi = 96;
+  HFONT title_font = nullptr;
+  HFONT body_font = nullptr;
+  HFONT small_font = nullptr;
+  bool accepted = false;
+  std::vector<std::string> capabilities;
+  std::vector<std::filesystem::path> roots;
+};
+
+bool HasIpcCapability(const std::vector<std::string>& capabilities,
+                      const char* capability) {
+  return std::find(capabilities.begin(), capabilities.end(), capability) !=
+         capabilities.end();
+}
+
+HWND AddIpcDialogControl(IpcDialogState& state, const wchar_t* kind,
+                         const wchar_t* text, DWORD style, int x, int y,
+                         int width, int height, int id, HFONT font,
+                         DWORD extended_style = 0) {
+  const auto control = CreateWindowExW(
+      extended_style, kind, text, WS_CHILD | WS_VISIBLE | style,
+      Scale(x, state.dpi), Scale(y, state.dpi), Scale(width, state.dpi),
+      Scale(height, state.dpi), state.window,
+      reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+      GetModuleHandleW(nullptr), nullptr);
+  if (!control) throw Error("Cannot create the IPC settings control");
+  SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+  SetWindowTheme(control, L"Explorer", nullptr);
+  return control;
+}
+
+void SetIpcDialogPreset(HWND window,
+                        const std::vector<std::string>& capabilities) {
+  for (const auto& item : kIpcCapabilityControls)
+    CheckDlgButton(window, item.id,
+                   HasIpcCapability(capabilities, item.capability)
+                       ? BST_CHECKED
+                       : BST_UNCHECKED);
+}
+
+std::vector<std::string> CollectIpcDialogCapabilities(HWND window) {
+  std::vector<std::string> capabilities;
+  for (const auto& item : kIpcCapabilityControls) {
+    if (IsDlgButtonChecked(window, item.id) == BST_CHECKED)
+      capabilities.emplace_back(item.capability);
+  }
+  return capabilities;
+}
+
+void RefreshIpcRootList(IpcDialogState& state) {
+  const auto list = GetDlgItem(state.window, kIpcRootList);
+  SendMessageW(list, LB_RESETCONTENT, 0, 0);
+  for (const auto& root : state.roots) {
+    const auto value = root.wstring();
+    SendMessageW(list, LB_ADDSTRING, 0,
+                 reinterpret_cast<LPARAM>(value.c_str()));
+  }
+  EnableWindow(GetDlgItem(state.window, kIpcRemoveRoot), !state.roots.empty());
+}
+
+void BuildIpcSettingsInterface(IpcDialogState& state) {
+  state.title_font = MakeFont(20, FW_SEMIBOLD, state.dpi);
+  state.body_font = MakeFont(14, FW_NORMAL, state.dpi);
+  state.small_font = MakeFont(12, FW_NORMAL, state.dpi);
+  AddIpcDialogControl(state, L"STATIC", L"本地交互能力（Native IPC）",
+                      SS_LEFT | SS_NOPREFIX, 24, 20, 420, 30, 0,
+                      state.title_font);
+  AddIpcDialogControl(
+      state, L"STATIC",
+      L"仅授权受信任的本地网页；网页需通过 window.lw.invoke() 主动调用。",
+      SS_LEFT | SS_NOPREFIX, 24, 54, 650, 22, 0, state.small_font);
+
+  AddIpcDialogControl(state, L"STATIC", L"常用方案", SS_LEFT | SS_NOPREFIX,
+                      24, 88, 90, 22, 0, state.body_font);
+  AddIpcDialogControl(state, L"BUTTON", L"只读文件查看", WS_TABSTOP,
+                      116, 82, 150, 32, kIpcPresetReadOnly, state.body_font);
+  AddIpcDialogControl(state, L"BUTTON", L"文件夹浏览", WS_TABSTOP,
+                      276, 82, 150, 32, kIpcPresetBrowse, state.body_font);
+  AddIpcDialogControl(state, L"BUTTON", L"完整文件管理", WS_TABSTOP,
+                      436, 82, 160, 32, kIpcPresetManage, state.body_font);
+
+  AddIpcDialogControl(state, L"STATIC", L"授权能力", SS_LEFT | SS_NOPREFIX,
+                      24, 130, 120, 22, 0, state.body_font);
+  for (std::size_t index = 0; index < kIpcCapabilityControls.size(); ++index) {
+    const auto& item = kIpcCapabilityControls[index];
+    const bool right = index >= 4;
+    const int row = static_cast<int>(index % 4);
+    AddIpcDialogControl(state, L"BUTTON", item.label,
+                        WS_TABSTOP | BS_AUTOCHECKBOX,
+                        right ? 358 : 32, 158 + row * 32, 260, 24,
+                        item.id, state.body_font);
+  }
+
+  AddIpcDialogControl(state, L"STATIC", L"固定授权目录（可选，最多 32 个）",
+                      SS_LEFT | SS_NOPREFIX, 24, 300, 300, 22, 0,
+                      state.body_font);
+  AddIpcDialogControl(
+      state, L"LISTBOX", L"",
+      WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
+      24, 328, 522, 132, kIpcRootList, state.body_font, WS_EX_CLIENTEDGE);
+  AddIpcDialogControl(state, L"BUTTON", L"添加目录", WS_TABSTOP,
+                      560, 328, 126, 34, kIpcAddRoot, state.body_font);
+  AddIpcDialogControl(state, L"BUTTON", L"移除所选", WS_TABSTOP,
+                      560, 372, 126, 34, kIpcRemoveRoot, state.body_font);
+  AddIpcDialogControl(
+      state, L"STATIC",
+      L"安全提示：固定目录会授予网页持续访问权限；删除、移动等写操作请按最小权限开启。",
+      SS_LEFT | SS_NOPREFIX, 24, 478, 662, 38, 0, state.small_font);
+  AddIpcDialogControl(state, L"BUTTON", L"保存", WS_TABSTOP | BS_DEFPUSHBUTTON,
+                      454, 526, 110, 36, IDOK, state.body_font);
+  AddIpcDialogControl(state, L"BUTTON", L"取消", WS_TABSTOP,
+                      576, 526, 110, 36, IDCANCEL, state.body_font);
+  SetIpcDialogPreset(state.window, state.capabilities);
+  RefreshIpcRootList(state);
+}
+
+LRESULT CALLBACK IpcSettingsWindowProc(HWND window, UINT message,
+                                       WPARAM wparam, LPARAM lparam) {
+  auto* state = reinterpret_cast<IpcDialogState*>(
+      GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    const auto* create = reinterpret_cast<CREATESTRUCTW*>(lparam);
+    state = reinterpret_cast<IpcDialogState*>(create->lpCreateParams);
+    state->window = window;
+    SetWindowLongPtrW(window, GWLP_USERDATA,
+                      reinterpret_cast<LONG_PTR>(state));
+  }
+  switch (message) {
+    case WM_COMMAND:
+      if (!state) break;
+      switch (LOWORD(wparam)) {
+        case kIpcPresetReadOnly:
+          SetIpcDialogPreset(window, {"app.info", "dialog.file"});
+          return 0;
+        case kIpcPresetBrowse:
+          SetIpcDialogPreset(
+              window, {"app.info", "dialog.directory", "fs.exists", "fs.list"});
+          return 0;
+        case kIpcPresetManage: {
+          std::vector<std::string> all;
+          for (const auto& item : kIpcCapabilityControls)
+            all.emplace_back(item.capability);
+          SetIpcDialogPreset(window, all);
+          return 0;
+        }
+        case kIpcAddRoot: {
+          const auto selected = PickFolder(window, L"添加 Native IPC 固定授权目录");
+          if (selected.empty()) return 0;
+          std::error_code path_error;
+          const auto absolute = std::filesystem::absolute(selected, path_error);
+          if (path_error) {
+            MessageBoxW(window, L"无法解析所选目录，请重新选择。",
+                        L"Native IPC", MB_OK | MB_ICONWARNING);
+            return 0;
+          }
+          const auto normalized = absolute.lexically_normal();
+          const auto duplicate = std::find_if(
+              state->roots.begin(), state->roots.end(),
+              [&](const std::filesystem::path& existing) {
+                return CompareStringOrdinal(existing.c_str(), -1,
+                                            normalized.c_str(), -1, TRUE) ==
+                       CSTR_EQUAL;
+              });
+          if (duplicate == state->roots.end()) {
+            if (state->roots.size() >= 32) {
+              MessageBoxW(window, L"固定授权目录最多只能添加 32 个。",
+                          L"Native IPC", MB_OK | MB_ICONWARNING);
+            } else {
+              state->roots.push_back(normalized);
+              RefreshIpcRootList(*state);
+            }
+          }
+          return 0;
+        }
+        case kIpcRemoveRoot: {
+          const auto selection = static_cast<int>(SendDlgItemMessageW(
+              window, kIpcRootList, LB_GETCURSEL, 0, 0));
+          if (selection != LB_ERR &&
+              static_cast<std::size_t>(selection) < state->roots.size()) {
+            state->roots.erase(state->roots.begin() + selection);
+            RefreshIpcRootList(*state);
+          }
+          return 0;
+        }
+        case IDOK: {
+          const auto capabilities = CollectIpcDialogCapabilities(window);
+          if (state->owner_state && state->owner_state->ipc_enabled &&
+              capabilities.empty()) {
+            MessageBoxW(window, L"已启用 Native IPC，请至少选择一项授权能力。",
+                        L"Native IPC", MB_OK | MB_ICONWARNING);
+            return 0;
+          }
+          state->capabilities = capabilities;
+          state->accepted = true;
+          DestroyWindow(window);
+          return 0;
+        }
+        case IDCANCEL:
+          DestroyWindow(window);
+          return 0;
+      }
+      break;
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN: {
+      const auto dc = reinterpret_cast<HDC>(wparam);
+      SetBkMode(dc, TRANSPARENT);
+      SetTextColor(dc, kText);
+      return reinterpret_cast<INT_PTR>(GetStockObject(WHITE_BRUSH));
+    }
+    case WM_CLOSE:
+      DestroyWindow(window);
+      return 0;
+    case WM_NCDESTROY:
+      SetWindowLongPtrW(window, GWLP_USERDATA, 0);
+      return DefWindowProcW(window, message, wparam, lparam);
+  }
+  return DefWindowProcW(window, message, wparam, lparam);
+}
+
+bool ShowIpcSettings(HWND owner, State& owner_state) {
+  static bool class_registered = false;
+  if (!class_registered) {
+    WNDCLASSEXW window_class{sizeof(window_class)};
+    window_class.lpfnWndProc = IpcSettingsWindowProc;
+    window_class.hInstance = GetModuleHandleW(nullptr);
+    window_class.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    window_class.hIcon = LoadIconW(window_class.hInstance, MAKEINTRESOURCEW(1));
+    window_class.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    window_class.lpszClassName = kIpcSettingsClassName;
+    if (!RegisterClassExW(&window_class) &&
+        GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+      throw Error("Cannot register the IPC settings window");
+    class_registered = true;
+  }
+
+  IpcDialogState dialog_state;
+  dialog_state.owner_state = &owner_state;
+  dialog_state.dpi = GetDpiForWindow(owner);
+  dialog_state.capabilities = owner_state.ipc_capabilities;
+  dialog_state.roots = owner_state.ipc_filesystem_roots;
+  constexpr DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+  constexpr DWORD extended_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  RECT bounds{0, 0, Scale(712, dialog_state.dpi), Scale(588, dialog_state.dpi)};
+  AdjustWindowRectExForDpi(&bounds, style, FALSE, extended_style,
+                           dialog_state.dpi);
+  RECT parent{};
+  GetWindowRect(owner, &parent);
+  const int width = bounds.right - bounds.left;
+  const int height = bounds.bottom - bounds.top;
+  const int x = parent.left + (parent.right - parent.left - width) / 2;
+  const int y = parent.top + (parent.bottom - parent.top - height) / 2;
+  const auto window = CreateWindowExW(
+      extended_style, kIpcSettingsClassName, L"配置 Native IPC 权限", style,
+      x, y, width, height, owner, nullptr, GetModuleHandleW(nullptr),
+      &dialog_state);
+  if (!window) throw Error("Cannot create the IPC settings window");
+
+  try {
+    BuildIpcSettingsInterface(dialog_state);
+  } catch (...) {
+    DestroyWindow(window);
+    if (dialog_state.title_font) DeleteObject(dialog_state.title_font);
+    if (dialog_state.body_font) DeleteObject(dialog_state.body_font);
+    if (dialog_state.small_font) DeleteObject(dialog_state.small_font);
+    throw;
+  }
+  EnableWindow(owner, FALSE);
+  ShowWindow(window, SW_SHOW);
+  UpdateWindow(window);
+  MSG message{};
+  while (IsWindow(window)) {
+    const auto result = GetMessageW(&message, nullptr, 0, 0);
+    if (result <= 0) {
+      if (IsWindow(window)) DestroyWindow(window);
+      if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
+      break;
+    }
+    if (!IsDialogMessageW(window, &message)) {
+      TranslateMessage(&message);
+      DispatchMessageW(&message);
+    }
+  }
+  EnableWindow(owner, TRUE);
+  SetForegroundWindow(owner);
+  DeleteObject(dialog_state.title_font);
+  DeleteObject(dialog_state.body_font);
+  DeleteObject(dialog_state.small_font);
+  if (dialog_state.accepted) {
+    owner_state.ipc_capabilities = std::move(dialog_state.capabilities);
+    owner_state.ipc_filesystem_roots = std::move(dialog_state.roots);
+  }
+  return dialog_state.accepted;
 }
 
 HBITMAP CreateBitmapFromWicSource(IWICImagingFactory* factory,
@@ -546,6 +883,23 @@ void OpenWebLink(HWND owner, const wchar_t* url) {
                 L"lw.Web2App", MB_OK | MB_ICONWARNING);
 }
 
+void RefreshIpcSummary(HWND window) {
+  auto* state = reinterpret_cast<State*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+  if (!state) return;
+  const bool local = IsDlgButtonChecked(window, kModeLocal) == BST_CHECKED;
+  std::wstring summary;
+  if (!local) {
+    summary = L"在线网址模式不支持 Native IPC";
+  } else if (!state->ipc_enabled) {
+    summary = L"默认关闭 · 仅供受信任的本地网页使用";
+  } else {
+    summary = L"已授权 " + std::to_wstring(state->ipc_capabilities.size()) +
+              L" 项能力 · 固定目录 " +
+              std::to_wstring(state->ipc_filesystem_roots.size()) + L" 个";
+  }
+  SetDynamicLabelText(window, kIpcSummary, summary);
+}
+
 void RefreshIconPreview(State& state) {
   const auto icon_text = Trim(Text(state.window, kIcon));
   HBITMAP replacement = nullptr;
@@ -611,6 +965,9 @@ void UpdateMode(HWND window) {
   const bool proxy = local && IsDlgButtonChecked(window, kBackendProxy) == BST_CHECKED;
   EnableWindow(GetDlgItem(window, kBackendOrigin), proxy);
   EnableWindow(GetDlgItem(window, kBackendOriginLabel), proxy);
+  EnableWindow(GetDlgItem(window, kIpcEnabled), local);
+  EnableWindow(GetDlgItem(window, kIpcSettings), local);
+  RefreshIpcSummary(window);
   InvalidateRect(window, nullptr, TRUE);
 }
 
@@ -665,6 +1022,16 @@ void Pack(HWND window) {
     options.manifest.logging.enabled = IsDlgButtonChecked(window, kLogging) == BST_CHECKED;
     options.manifest.logging.level =
         IsDlgButtonChecked(window, kDebugLogging) == BST_CHECKED ? "debug" : "info";
+    const bool local_mode =
+        IsDlgButtonChecked(window, kModeLocal) == BST_CHECKED;
+    options.manifest.ipc.enabled = local_mode && state->ipc_enabled;
+    if (options.manifest.ipc.enabled) {
+      if (state->ipc_capabilities.empty())
+        throw Error("启用 Native IPC 后必须至少授权一项能力");
+      options.manifest.ipc.capabilities = state->ipc_capabilities;
+      for (const auto& root : state->ipc_filesystem_roots)
+        options.manifest.ipc.filesystem_roots.push_back(root.u8string());
+    }
     auto product_name = Trim(Text(window, kProductName));
     auto file_description = Trim(Text(window, kFileDescription));
     if (product_name.empty()) product_name = title;
@@ -783,6 +1150,11 @@ void BuildInterface(State& state) {
              704, 488, 132, 24, kLogging);
   AddControl(state, L"BUTTON", L"详细日志", WS_TABSTOP | BS_AUTOCHECKBOX,
              850, 488, 106, 24, kDebugLogging);
+  AddControl(state, L"BUTTON", L"启用本地交互（Native IPC）",
+             WS_TABSTOP | BS_AUTOCHECKBOX, 558, 522, 276, 24, kIpcEnabled);
+  AddButton(state, L"配置 IPC 权限…", 850, 520, 222, 34, kIpcSettings);
+  AddLabel(state, L"默认关闭 · 仅供受信任的本地网页使用", 558, 554,
+           276, 20, kIpcSummary, state.small_font);
   CheckDlgButton(state.window, kFullscreen, BST_CHECKED);
   CheckDlgButton(state.window, kResizable, BST_CHECKED);
   CheckDlgButton(state.window, kSpa, BST_CHECKED);
@@ -796,6 +1168,7 @@ void BuildInterface(State& state) {
   AddButton(state, L"生成 Windows EXE", 834, 618, 238, 50, kPack);
   EnableWindow(GetDlgItem(state.window, kBackendOrigin), FALSE);
   EnableWindow(GetDlgItem(state.window, kBackendOriginLabel), FALSE);
+  RefreshIpcSummary(state.window);
   RefreshHtmlEntries(state.window);
   state.product_name_edited = false;
   state.file_description_edited = false;
@@ -879,6 +1252,22 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
           EnableWindow(GetDlgItem(window, kDebugLogging),
                        IsDlgButtonChecked(window, kLogging) == BST_CHECKED);
           return 0;
+        case kIpcEnabled:
+          state->ipc_enabled =
+              IsDlgButtonChecked(window, kIpcEnabled) == BST_CHECKED;
+          if (state->ipc_enabled && state->ipc_capabilities.empty())
+            state->ipc_capabilities = {"app.info", "dialog.file"};
+          RefreshIpcSummary(window);
+          return 0;
+        case kIpcSettings:
+          try {
+            if (ShowIpcSettings(window, *state)) RefreshIpcSummary(window);
+          } catch (const std::exception& error) {
+            const auto error_message = Utf8ToWide(error.what());
+            MessageBoxW(window, error_message.c_str(), L"Native IPC 配置失败",
+                        MB_OK | MB_ICONERROR);
+          }
+          return 0;
         case kBackendProxy: UpdateMode(window); return 0;
         case kBrowseSource: {
           const auto path = PickFolder(window);
@@ -940,7 +1329,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
       const auto id = GetDlgCtrlID(reinterpret_cast<HWND>(lparam));
       SetBkMode(dc, TRANSPARENT);
       COLORREF color = kText;
-      if (id == kModeHint || id == kSponsorCaption || id == kHeaderVersion) color = kMuted;
+      if (id == kModeHint || id == kSponsorCaption || id == kHeaderVersion ||
+          id == kIpcSummary)
+        color = kMuted;
       if (state && id == kIconHint) color = state->icon_hint_color;
       SetTextColor(dc, color);
       if (state && id == kIconHint) {

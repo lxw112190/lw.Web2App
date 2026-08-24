@@ -8,7 +8,12 @@ Native IPC 让打包进 lw.Web2App 的可信静态页面，通过统一的
 
 ## 快速开始
 
-打包仓库内的[简单示例](../examples/native-ipc/index.html)：
+使用 Windows 图形界面时，先选择“本地静态目录”，再勾选“启用本地交互
+（Native IPC）”并点击“配置 IPC 权限…”。权限窗口提供“只读文件查看”、
+“文件夹浏览”和“完整文件管理”三个预设，也可以逐项授权；固定授权目录是可选项。
+启用界面选项只负责写入权限配置，网页仍需调用 `window.lw.invoke()` 才会使用这些能力。
+
+也可以通过 CLI 打包仓库内的[简单示例](../examples/native-ipc/index.html)：
 
 ```powershell
 lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `

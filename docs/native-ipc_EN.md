@@ -8,7 +8,15 @@ default, works only in local package mode, and is unavailable in URL mode.
 
 ## Quick start
 
-Package the repository's [simple example](../examples/native-ipc/index.html):
+In the Windows GUI, select **Local static directory**, enable **Local interaction
+(Native IPC)**, and open **Configure IPC permissions...**. The permissions window
+provides read-only file viewing, folder browsing, and full file management presets,
+plus individual capability checkboxes and optional fixed roots. Enabling the GUI
+option only writes the permission policy; the page must still call
+`window.lw.invoke()` to use it.
+
+You can also package the repository's [simple example](../examples/native-ipc/index.html)
+with the CLI:
 
 ```powershell
 lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
