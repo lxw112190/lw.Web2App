@@ -87,6 +87,19 @@ std::string DefaultOutputPath() {
   return (CurrentExecutablePath().parent_path() / "out" / "MyWebApp").string();
 }
 
+std::string RandomIpcTransportToken() {
+  unsigned char bytes[32]{};
+  if (RAND_bytes(bytes, sizeof(bytes)) != 1)
+    throw Error("Cannot generate the Native IPC session token");
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string result(sizeof(bytes) * 2, '0');
+  for (std::size_t i = 0; i < sizeof(bytes); ++i) {
+    result[i * 2] = hex[bytes[i] >> 4];
+    result[i * 2 + 1] = hex[bytes[i] & 0x0f];
+  }
+  return result;
+}
+
 // GTK/WebKitGTK 信号回调共享的轻量运行状态；对象生命周期覆盖整个 gtk_main 循环。
 struct RuntimeState {
   Logger* logger = nullptr;
@@ -553,19 +566,6 @@ std::string ComboText(GtkWidget* combo) {
   if (!text) return {};
   std::string result(text);
   g_free(text);
-  return result;
-}
-
-std::string RandomIpcTransportToken() {
-  unsigned char bytes[32]{};
-  if (RAND_bytes(bytes, sizeof(bytes)) != 1)
-    throw Error("Cannot generate the Native IPC session token");
-  static constexpr char hex[] = "0123456789abcdef";
-  std::string result(sizeof(bytes) * 2, '0');
-  for (std::size_t i = 0; i < sizeof(bytes); ++i) {
-    result[i * 2] = hex[bytes[i] >> 4];
-    result[i * 2 + 1] = hex[bytes[i] & 0x0f];
-  }
   return result;
 }
 

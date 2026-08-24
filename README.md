@@ -231,7 +231,7 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
 
 ```text
 .deps/json.tar.xz
-.deps/cpp-httplib.tar.gz
+.deps/cpp-httplib-v0.51.0.tar.gz
 .deps/miniz.tar.gz
 .deps/spdlog.tar.gz
 .deps/webview2.zip
@@ -610,7 +610,7 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 - Microsoft WebView2 SDK：Microsoft 软件许可
 - GTK3 / WebKitGTK / OpenSSL：Linux 系统动态依赖，遵循各自许可证
 - miniz：MIT License
-- cpp-httplib：MIT License
+- cpp-httplib v0.51.0：MIT License
 - nlohmann/json：MIT License
 - spdlog（含 bundled fmt）：MIT License
 

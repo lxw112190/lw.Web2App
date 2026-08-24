@@ -40,14 +40,14 @@ FetchContent_Declare(nlohmann_json
   URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa)
 FetchContent_MakeAvailable(nlohmann_json)
 
-if(EXISTS "${LWWEB_DEPS_CACHE}/cpp-httplib.tar.gz")
-  set(LWWEB_HTTPLIB_URL "${LWWEB_DEPS_CACHE}/cpp-httplib.tar.gz")
+if(EXISTS "${LWWEB_DEPS_CACHE}/cpp-httplib-v0.51.0.tar.gz")
+  set(LWWEB_HTTPLIB_URL "${LWWEB_DEPS_CACHE}/cpp-httplib-v0.51.0.tar.gz")
 else()
-  set(LWWEB_HTTPLIB_URL "https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.30.0.tar.gz")
+  set(LWWEB_HTTPLIB_URL "https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.51.0.tar.gz")
 endif()
 FetchContent_Declare(cpp_httplib
   URL "${LWWEB_HTTPLIB_URL}"
-  URL_HASH SHA256=135adc029364a70d0c1769f60bef8a2cdc7915e2525eb3ec759e2084af7a7e7b)
+  URL_HASH SHA256=d740ced75352f44e9d66d08806dc231b5621bb3592b5a5d5b2bd890a9a9d86cc)
 set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
@@ -209,6 +209,7 @@ if(BUILD_TESTING)
     tests/cli_tests.cpp
     tests/filesystem_access_tests.cpp
     tests/ipc_tests.cpp
+    tests/local_file_bridge_tests.cpp
     tests/payload_binding_tests.cpp
     tests/test_main.cpp
     tests/payload_tests.cpp

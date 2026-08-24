@@ -224,7 +224,7 @@ CMake first checks `.deps` in the repository root for these archives:
 
 ```text
 .deps/json.tar.xz
-.deps/cpp-httplib.tar.gz
+.deps/cpp-httplib-v0.51.0.tar.gz
 .deps/miniz.tar.gz
 .deps/spdlog.tar.gz
 .deps/webview2.zip
@@ -569,7 +569,7 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 - Microsoft WebView2 SDK — Microsoft software license
 - GTK3 / WebKitGTK / OpenSSL — Linux system dynamic dependencies under their respective licenses
 - miniz — MIT License
-- cpp-httplib — MIT License
+- cpp-httplib v0.51.0 — MIT License
 - nlohmann/json — MIT License
 - spdlog (including bundled fmt) — MIT License
 

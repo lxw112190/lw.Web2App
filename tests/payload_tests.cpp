@@ -403,7 +403,7 @@ void RunPayloadTests() {
   Check(stable_port >= 49152, "stable app port uses the private range");
   Check(stable_port == lwweb::StableAppPort(loaded.manifest.app_id),
         "stable app port is deterministic");
-  Check(stable_port != lwweb::StableAppPort("app-a-different-id"),
+  Check(lwweb::StableAppPort("app-port-a") != lwweb::StableAppPort("app-port-b"),
         "different app IDs distribute across ports");
   {
     auto file_grants = std::make_shared<lwweb::LocalFileGrantManager>();
@@ -523,8 +523,8 @@ void RunPayloadTests() {
     const auto download_disposition =
         download->get_header_value("Content-Disposition");
     Check(download_disposition ==
-              "attachment; filename*=UTF-8''proxy-download-测试.bin",
-          "download content disposition and UTF-8 filename are preserved");
+              "attachment; filename*=UTF-8''proxy-download-%E6%B5%8B%E8%AF%95.bin",
+          "download content disposition and RFC 5987 filename are preserved");
     Check(download->get_header_value("Content-Length") ==
               std::to_string(download_data.size()),
           "download content length is preserved");

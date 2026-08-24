@@ -110,18 +110,22 @@ jobs:
           $ErrorActionPreference = "Stop"
           $packer = (Resolve-Path 'build/Release/lw.Web2App.exe').Path
           $output = Join-Path $PWD 'dist/lw.Web2App/examples/native-ipc.exe'
-          & $packer pack examples/native-ipc $output --title 'Native IPC 示例' `
-            --windowed --ipc `
-            --ipc-capability app.info `
-            --ipc-capability dialog.directory `
-            --ipc-capability dialog.file `
-            --ipc-capability fs.exists `
-            --ipc-capability fs.list `
-            --ipc-capability fs.copy `
-            --ipc-capability fs.move `
-            --ipc-capability fs.delete
-          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $output)) {
-            throw "Native IPC example packaging failed"
+          $pack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+            -ArgumentList @(
+              'pack', 'examples/native-ipc', $output,
+              '--title', '"Native IPC 示例"',
+              '--windowed', '--ipc',
+              '--ipc-capability', 'app.info',
+              '--ipc-capability', 'dialog.directory',
+              '--ipc-capability', 'dialog.file',
+              '--ipc-capability', 'fs.exists',
+              '--ipc-capability', 'fs.list',
+              '--ipc-capability', 'fs.copy',
+              '--ipc-capability', 'fs.move',
+              '--ipc-capability', 'fs.delete'
+            )
+          if ($pack.ExitCode -ne 0 -or -not (Test-Path $output)) {
+            throw "Native IPC example packaging failed with exit code $($pack.ExitCode)"
           }
           $inspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
             -ArgumentList @('inspect', $output)
