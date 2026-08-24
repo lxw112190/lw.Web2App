@@ -20,8 +20,8 @@ struct ProjectAppConfig {
   std::filesystem::path icon;
 };
 
-// Windows Installer 的声明式开关。具体 Inno Setup 构建在后续阶段实现，
-// 但路径从一开始就按 lwweb.json 所在目录解析，避免 CI 与 IDE 行为漂移。
+// Windows Installer 的声明式开关。iscc 可留空并由 Publisher 从 PATH 或
+// Inno Setup 常见安装目录查找；显式相对路径以 lwweb.json 所在目录解析。
 struct WindowsInstallerConfig {
   bool enabled = false;
   bool desktop_shortcut = true;

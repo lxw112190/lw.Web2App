@@ -35,6 +35,10 @@ jobs:
           cache: npm
           cache-dependency-path: integration/wechat-article-formatter/package-lock.json
 
+      - name: Install Inno Setup compiler
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
       - name: Configure Release x64
         run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
 
@@ -221,6 +225,62 @@ jobs:
             $inspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
               -ArgumentList @('inspect', $unsigned)
             if ($inspect.ExitCode -ne 0) { throw 'Unsigned payload inspection failed' }
+
+            $publishOutput = Join-Path $PWD 'build/signing-smoke/publish-output'
+            $projectConfig = Join-Path $PWD 'build/signing-smoke/lwweb.json'
+            @{
+              schema = 1
+              app = @{
+                id = 'com.lwweb.ci.signed-publish'
+                name = 'Signed Publish'
+                version = '1.0.0'
+                company = 'lw.Web2App CI'
+                description = 'Signed Installer integration test'
+              }
+              web = @{
+                source = $source
+                entry = 'index.html'
+              }
+              publish = @{
+                output = $publishOutput
+                windows = @{
+                  portable = $true
+                  zip = $false
+                  installer = @{
+                    enabled = $true
+                    desktop_shortcut = $false
+                    start_menu = $true
+                  }
+                  signing = @{
+                    enabled = $true
+                    certificate_thumbprint = $certificate.Thumbprint
+                    signtool = $signTool.FullName
+                  }
+                }
+              }
+            } | ConvertTo-Json -Depth 10 | Set-Content $projectConfig -Encoding utf8NoBOM
+            $publish = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+              -ArgumentList @('publish', '--config', $projectConfig)
+            if ($publish.ExitCode -ne 0) { throw 'Signed Installer publish failed' }
+            $release = Join-Path $publishOutput 'Signed Publish-1.0.0-windows-x64'
+            $publishedApp = Join-Path $release 'Signed Publish.exe'
+            $publishedSetup = Join-Path $release 'Signed Publish-Setup-1.0.0.exe'
+            foreach ($artifact in @($publishedApp, $publishedSetup)) {
+              if (-not (Test-Path $artifact)) { throw "Missing signed artifact: $artifact" }
+              $artifactSignature = Get-AuthenticodeSignature $artifact
+              if ($artifactSignature.Status -ne 'Valid') {
+                throw "Artifact signature is invalid: $artifact"
+              }
+              & $signTool.FullName verify /pa /v $artifact
+              if ($LASTEXITCODE -ne 0) { throw "SignTool rejected artifact: $artifact" }
+            }
+            $releaseInfo = Get-Content (Join-Path $release 'RELEASE_INFO.json') |
+              ConvertFrom-Json
+            $installerArtifact = $releaseInfo.artifacts |
+              Where-Object type -eq 'installer'
+            if (-not $installerArtifact -or -not $installerArtifact.signed) {
+              throw 'Release metadata did not record the signed Installer'
+            }
           } finally {
             foreach ($storeName in $trustedStores) {
               $store = [System.Security.Cryptography.X509Certificates.X509Store]::new(

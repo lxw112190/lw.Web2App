@@ -299,18 +299,21 @@ lw.Web2App.exe publish
 lw.Web2App.exe publish --config .\config\lwweb.json --output .\release
 ```
 
-Windows 默认生成 Portable EXE 与 ZIP，Ubuntu 默认生成可执行文件与 `tar.gz`。每个版本拥有独立目录，并同时生成 `SHA256SUMS.txt` 和机器可读的 `RELEASE_INFO.json`：
+Windows 默认生成 Portable EXE 与 ZIP，启用 Installer 后会增加 Setup EXE；Ubuntu 默认生成可执行文件与 `tar.gz`。每个版本拥有独立目录，并同时生成 `SHA256SUMS.txt` 和机器可读的 `RELEASE_INFO.json`：
 
 ```text
 release/
 └── MyApp-1.2.0-windows-x64/
     ├── MyApp.exe
+    ├── MyApp-Setup-1.2.0.exe
     ├── MyApp-1.2.0-windows-x64.zip
     ├── SHA256SUMS.txt
     └── RELEASE_INFO.json
 ```
 
-发布过程先在输出目录内的隐藏暂存目录完成打包、压缩和 SHA-256 计算，全部成功后才整体替换同版本目录；中途失败会清理半成品并保留原发布结果。配置文件中的 `publish.output` 仍以配置文件目录为基准，显式 `--output` 则以当前终端目录为基准。当前阶段尚未生成应用安装器或应用专属 DEB，因此启用 `publish.windows.installer.enabled` 或 `publish.linux.deb` 会明确报错，而不会静默漏掉产物。
+发布过程先在输出目录内的隐藏暂存目录完成打包、安装器、压缩和 SHA-256 计算，全部成功后才整体替换同版本目录；中途失败会清理半成品并保留原发布结果。配置文件中的 `publish.output` 仍以配置文件目录为基准，显式 `--output` 则以当前终端目录为基准。当前阶段尚未生成应用专属 DEB，因此启用 `publish.linux.deb` 会明确报错，而不会静默漏掉产物。
+
+Windows Installer 使用 [Inno Setup 6.3 或更高版本](https://jrsoftware.org/isinfo.php) 构建。启用 `publish.windows.installer.enabled` 后，程序依次从 `installer.iscc`、`PATH`、Inno Setup 常见安装目录查找 `ISCC.exe`；找不到时会明确失败，不会跳过安装器。安装器使用稳定的 `app.id` 作为升级身份，默认安装到 `{autopf}\应用名`，提供卸载入口，并按配置创建开始菜单、提供默认不勾选的桌面快捷方式选项。启用 Authenticode 时，Portable EXE 会先签名并写入安装器，随后 Setup EXE 再单独签名，因此两个最终文件都能验证发布者。
 
 ## CLI 使用方法
 
@@ -532,6 +535,7 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 2. Ubuntu 22.04、24.04 使用 Ninja、GTK3、WebKitGTK 4.1 和 OpenSSL 构建并测试 Linux x64。
 3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
 4. Windows 与 Ubuntu 都执行 `publish` 冒烟测试，并校验 ZIP/tar.gz、`SHA256SUMS.txt` 和 `RELEASE_INFO.json`。
+5. Windows CI 使用真实 Inno Setup 生成 Installer，并验证 Portable 与 Setup 的 Authenticode 签名。
 4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
 5. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
 6. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。

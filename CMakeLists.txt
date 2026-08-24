@@ -137,7 +137,8 @@ target_link_libraries(lwweb_core PUBLIC
   spdlog::spdlog)
 
 if(WIN32)
-  target_sources(lwweb_core PRIVATE src/pe/authenticode.cpp src/pe/pe_resources.cpp)
+  target_sources(lwweb_core PRIVATE src/pe/authenticode.cpp src/pe/pe_resources.cpp
+    src/publish/windows_installer.cpp)
   target_link_libraries(lwweb_core PUBLIC bcrypt ws2_32 version shell32 wintrust)
   target_compile_definitions(lwweb_core PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX
     SPDLOG_WCHAR_FILENAMES _WIN32_WINNT=0x0A00)

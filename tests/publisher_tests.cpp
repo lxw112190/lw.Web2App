@@ -148,6 +148,46 @@ void RunPublisherTests() {
   Check(valid_tar && stored_crc == actual_crc,
         "Linux tar.gz has a valid USTAR header and GZip CRC");
 
+#ifdef _WIN32
+  auto installer_config = nlohmann::json::parse(lwweb::ReadFileText(config));
+  installer_config["publish"]["windows"]["zip"] = false;
+  installer_config["publish"]["windows"]["installer"] = {
+      {"enabled", true},
+      {"desktop_shortcut", false},
+      {"start_menu", true},
+      {"iscc", lwweb::CurrentExecutablePath().u8string()}};
+  WriteText(config, installer_config.dump(2));
+  auto installer_options = options;
+  installer_options.output_override = root / "installer-release";
+  const auto installer_result = lwweb::PublishProject(installer_options);
+  const auto setup =
+      installer_result.directory / "Publish Test-Setup-1.2.3.exe";
+  Check(std::filesystem::is_regular_file(setup) &&
+            !std::filesystem::exists(installer_result.directory /
+                                     ".lwweb-installer.iss") &&
+            installer_result.release.artifacts.size() == 2 &&
+            installer_result.release.artifacts[0].type == "portable" &&
+            installer_result.release.artifacts[1].type == "installer" &&
+            installer_result.release.artifacts[1].sha256 == Digest(setup),
+        "Windows publish builds, validates, and records an Installer artifact");
+  WriteText(installer_result.directory / "installer-release.marker",
+            "preserve on ISCC failure");
+  installer_config["publish"]["windows"]["installer"]["iscc"] =
+      (root / "missing-ISCC.exe").u8string();
+  WriteText(config, installer_config.dump(2));
+  bool installer_failed = false;
+  try {
+    (void)lwweb::PublishProject(installer_options);
+  } catch (...) {
+    installer_failed = true;
+  }
+  Check(installer_failed &&
+            lwweb::ReadFileText(installer_result.directory /
+                                "installer-release.marker") ==
+                "preserve on ISCC failure",
+        "ISCC failure preserves the previous complete release");
+#endif
+
   WriteText(result.directory / "previous-release.marker", "keep on failure");
   WriteText(config, R"JSON({
     "schema": 1,

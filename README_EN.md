@@ -292,18 +292,21 @@ lw.Web2App.exe publish
 lw.Web2App.exe publish --config .\config\lwweb.json --output .\release
 ```
 
-Windows produces a portable EXE and ZIP by default. Ubuntu produces an executable and `tar.gz`. Every version gets an isolated directory plus `SHA256SUMS.txt` and a machine-readable `RELEASE_INFO.json`:
+Windows produces a portable EXE and ZIP by default, with a Setup EXE added when the Installer is enabled. Ubuntu produces an executable and `tar.gz`. Every version gets an isolated directory plus `SHA256SUMS.txt` and a machine-readable `RELEASE_INFO.json`:
 
 ```text
 release/
 └── MyApp-1.2.0-windows-x64/
     ├── MyApp.exe
+    ├── MyApp-Setup-1.2.0.exe
     ├── MyApp-1.2.0-windows-x64.zip
     ├── SHA256SUMS.txt
     └── RELEASE_INFO.json
 ```
 
-Publishing completes packaging, compression, and SHA-256 generation in a hidden staging directory under the output root, then replaces the same-version directory only after every stage succeeds. A failure removes incomplete files and preserves the previous release. `publish.output` in the project file is relative to that file, while an explicit CLI `--output` is relative to the current working directory. Application installers and application-specific DEBs are not generated in this stage; enabling `publish.windows.installer.enabled` or `publish.linux.deb` therefore reports a clear error instead of silently omitting an artifact.
+Publishing completes packaging, Installer creation, compression, and SHA-256 generation in a hidden staging directory under the output root, then replaces the same-version directory only after every stage succeeds. A failure removes incomplete files and preserves the previous release. `publish.output` in the project file is relative to that file, while an explicit CLI `--output` is relative to the current working directory. Application-specific DEBs are not generated in this stage; enabling `publish.linux.deb` therefore reports a clear error instead of silently omitting an artifact.
+
+Windows Installers are built with [Inno Setup 6.3 or newer](https://jrsoftware.org/isinfo.php). When `publish.windows.installer.enabled` is true, lw.Web2App searches for `ISCC.exe` in `installer.iscc`, `PATH`, and common Inno Setup installation directories, in that order. A missing compiler is a hard error. The stable `app.id` becomes the upgrade identity; the default destination is `{autopf}\AppName`, with an uninstall entry, a configurable Start Menu shortcut, and an initially unchecked desktop-shortcut task. With Authenticode enabled, the portable application is signed before being embedded, then the Setup EXE is signed separately, so both final executables carry publisher trust.
 
 ## CLI
 
@@ -502,6 +505,7 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 3. Builds the `wechat-article-formatter` Vite bundle in all platform jobs.
 4. Generates a Windows EXE or Linux ELF and validates its payload with `inspect`.
 5. Runs `publish` smoke tests on Windows and Ubuntu and validates the ZIP/tar.gz, `SHA256SUMS.txt`, and `RELEASE_INFO.json`.
+6. Builds an Installer with real Inno Setup on Windows CI and verifies Authenticode on both the Portable EXE and Setup EXE.
 5. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
 6. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
 7. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.

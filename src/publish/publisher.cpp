@@ -5,6 +5,10 @@
 #include "lwweb/common/sha256.h"
 #include "lwweb/packer/packer.h"
 #include "lwweb/publish/publish_config.h"
+#ifdef _WIN32
+#include "lwweb/pe/authenticode.h"
+#include "lwweb/publish/windows_installer.h"
+#endif
 
 #include <miniz.h>
 
@@ -365,14 +369,18 @@ PublishResult PublishProject(const PublishOptions& options) {
     throw Error("publish output must not be inside the web source directory");
 
   const bool windows = options.platform == PublishPlatform::Windows;
-  if (windows && config.publish.windows.installer.enabled)
-    throw Error("Windows installer publishing is not available yet");
   if (!windows && config.publish.linux.deb)
     throw Error("Linux application DEB publishing is not available yet");
   const bool portable = windows ? config.publish.windows.portable : true;
   const bool archive = windows ? config.publish.windows.zip
                                : config.publish.linux.tar_gz;
-  if (!portable && !archive)
+  const bool installer =
+      windows && config.publish.windows.installer.enabled;
+#ifndef _WIN32
+  if (installer)
+    throw Error("Windows installer publishing requires a Windows host");
+#endif
+  if (!portable && !archive && !installer)
     throw Error("publish has no enabled artifacts for this platform");
 
   std::error_code error;
@@ -396,28 +404,62 @@ PublishResult PublishProject(const PublishOptions& options) {
 
   ReleaseInfo info{config.app.id, config.app.name, config.app.version, {}};
   std::vector<std::filesystem::path> distributables;
+  std::optional<std::filesystem::path> installer_path;
+  if (installer) {
+    Progress(options, "Publish: build Windows installer");
+#ifdef _WIN32
+    const auto installer_basename =
+        safe_name + "-Setup-" + config.app.version;
+    WindowsInstallerBuildOptions installer_options;
+    installer_options.application = pack.output;
+    installer_options.output_directory = staging.Path();
+    installer_options.configured_iscc =
+        config.publish.windows.installer.iscc;
+    installer_options.output_basename = installer_basename;
+    installer_options.app_id = config.app.id;
+    installer_options.app_name = config.app.name;
+    installer_options.app_version = config.app.version;
+    installer_options.publisher = config.app.company;
+    installer_options.desktop_shortcut =
+        config.publish.windows.installer.desktop_shortcut;
+    installer_options.start_menu =
+        config.publish.windows.installer.start_menu;
+    installer_path = BuildWindowsInstaller(installer_options);
+    if (pack.signing.enabled) {
+      Progress(options, "Publish: sign Windows installer");
+      SignAuthenticode(*installer_path, pack.signing);
+    }
+#endif
+  }
+  std::optional<std::filesystem::path> archive_path;
   if (archive) {
     Progress(options, windows ? "Publish: create ZIP archive"
                               : "Publish: create tar.gz archive");
     const auto extension = windows ? ".zip" : ".tar.gz";
-    const auto archive_path =
+    archive_path =
         staging.Path() / std::filesystem::u8path(release_name + extension);
     if (windows)
-      CreateZip(pack.output, application_name, archive_path);
+      CreateZip(pack.output, application_name, *archive_path);
     else
-      CreateTarGzip(pack.output, application_name, archive_path);
-    distributables.push_back(archive_path);
-    info.artifacts.push_back({archive_path.filename().u8string(), "archive",
-                              platform, "x64", false, {}});
+      CreateTarGzip(pack.output, application_name, *archive_path);
   }
   if (portable) {
-    distributables.insert(distributables.begin(), pack.output);
-    info.artifacts.insert(info.artifacts.begin(),
-                          {application_name, "portable", platform, "x64",
-                           windows && pack.signing.enabled, {}});
+    distributables.push_back(pack.output);
+    info.artifacts.push_back({application_name, "portable", platform, "x64",
+                              windows && pack.signing.enabled, {}});
   } else {
     std::filesystem::remove(pack.output, error);
     if (error) throw Error("Cannot remove intermediate portable application");
+  }
+  if (installer_path) {
+    distributables.push_back(*installer_path);
+    info.artifacts.push_back({installer_path->filename().u8string(), "installer",
+                              platform, "x64", pack.signing.enabled, {}});
+  }
+  if (archive_path) {
+    distributables.push_back(*archive_path);
+    info.artifacts.push_back({archive_path->filename().u8string(), "archive",
+                              platform, "x64", false, {}});
   }
 
   Progress(options, "Publish: calculate SHA-256 checksums");
