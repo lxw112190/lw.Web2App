@@ -316,7 +316,8 @@ void UpdateIcon(HANDLE update, const std::filesystem::path& path) {
 
 // 对一个干净的 PE 文件执行一次完整资源事务；失败后不能复用该事务句柄。
 void ApplyPeResources(const std::filesystem::path& executable,
-                      const PeMetadata& metadata) {
+                      const PeMetadata& metadata,
+                      const std::optional<PayloadBinding>& binding) {
   ResourceUpdate update(executable);
   if (!metadata.product_name.empty() || !metadata.company_name.empty() ||
       !metadata.file_description.empty() || !metadata.copyright.empty()) {
@@ -327,16 +328,26 @@ void ApplyPeResources(const std::filesystem::path& executable,
       ThrowResourceError("UpdateResource(RT_VERSION)");
   }
   UpdateIcon(update.get(), metadata.icon);
+  if (binding) {
+    auto bytes = EncodePayloadBinding(*binding);
+    if (!UpdateResourceW(
+            update.get(), kPayloadBindingResourceType,
+            MAKEINTRESOURCEW(kPayloadBindingResourceId),
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL), bytes.data(),
+            static_cast<DWORD>(bytes.size())))
+      ThrowResourceError("UpdateResource(LWWEB_BINDING)");
+  }
   update.Commit();
 }
 
 }  // namespace
 
 void UpdatePeResources(const std::filesystem::path& executable,
-                       const PeMetadata& metadata) {
+                       const PeMetadata& metadata,
+                       const std::optional<PayloadBinding>& binding) {
   if (metadata.product_name.empty() && metadata.company_name.empty() &&
       metadata.file_description.empty() && metadata.copyright.empty() &&
-      metadata.icon.empty())
+      metadata.icon.empty() && !binding)
     return;
   auto backup = executable;
   backup += L".pe-resource-backup.tmp";
@@ -367,7 +378,7 @@ void UpdatePeResources(const std::filesystem::path& executable,
         }
       }
       try {
-        ApplyPeResources(executable, metadata);
+        ApplyPeResources(executable, metadata, binding);
         file_error.clear();
         std::filesystem::remove(backup, file_error);
         return;
@@ -384,6 +395,55 @@ void UpdatePeResources(const std::filesystem::path& executable,
     std::filesystem::remove(backup, file_error);
     throw;
   }
+}
+
+std::optional<PayloadBinding> ReadPePayloadBinding(
+    const std::filesystem::path& executable) {
+  const auto module = LoadLibraryExW(
+      executable.c_str(), nullptr,
+      LOAD_LIBRARY_AS_DATAFILE | LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+  if (!module)
+    throw Error("Cannot open PE resources: " +
+                WindowsErrorMessage(GetLastError()));
+  struct ModuleGuard {
+    HMODULE module;
+    ~ModuleGuard() { FreeLibrary(module); }
+  } guard{module};
+
+  const auto resource = FindResourceW(
+      module, MAKEINTRESOURCEW(kPayloadBindingResourceId),
+      kPayloadBindingResourceType);
+  if (!resource) {
+    const auto code = GetLastError();
+    if (code == ERROR_RESOURCE_DATA_NOT_FOUND ||
+        code == ERROR_RESOURCE_NAME_NOT_FOUND ||
+        code == ERROR_RESOURCE_TYPE_NOT_FOUND)
+      return std::nullopt;
+    throw Error("Cannot find LWWEB_BINDING resource: " +
+                WindowsErrorMessage(code));
+  }
+  const auto size = SizeofResource(module, resource);
+  if (size != kPayloadBindingSize)
+    throw Error("LWWEB_BINDING resource has an invalid size");
+  const auto loaded = LoadResource(module, resource);
+  if (!loaded)
+    throw Error("Cannot load LWWEB_BINDING resource: " +
+                WindowsErrorMessage(GetLastError()));
+  const auto* data = static_cast<const std::uint8_t*>(LockResource(loaded));
+  if (!data) throw Error("Cannot lock LWWEB_BINDING resource");
+  std::array<std::uint8_t, kPayloadBindingSize> bytes{};
+  std::copy_n(data, bytes.size(), bytes.begin());
+  return DecodePayloadBinding(bytes);
+}
+
+void VerifyPePayloadBinding(const std::filesystem::path& executable,
+                            const Sha256Digest& footer_digest) {
+  const auto binding = ReadPePayloadBinding(executable);
+  if (!binding) return;
+  if (binding->payload_sha256 != footer_digest)
+    throw Error("Signed payload binding does not match the application payload");
+  if ((binding->flags & kBindingAuthenticodeRequired) != 0)
+    throw Error("Payload binding requires Authenticode verification, which is not available");
 }
 
 }  // namespace lwweb

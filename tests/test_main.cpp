@@ -3,6 +3,7 @@
 void RunCliTests();
 void RunFilesystemAccessTests();
 void RunIpcTests();
+void RunPayloadBindingTests();
 void RunPayloadTests();
 void RunPathTests();
 void RunResourceTests();
@@ -12,6 +13,7 @@ int main() {
     RunCliTests();
     RunFilesystemAccessTests();
     RunIpcTests();
+    RunPayloadBindingTests();
     RunPayloadTests();
     RunPathTests();
     RunResourceTests();

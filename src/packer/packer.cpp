@@ -309,10 +309,13 @@ void PackApplication(const PackOptions& options) {
     phase = "platform metadata update";
     Progress(options, "Writing platform metadata");
 #ifdef _WIN32
-    UpdatePeResources(staging, options.metadata);
+    PayloadBinding binding;
+    binding.payload_sha256 = prepared.sha256;
+    UpdatePeResources(staging, options.metadata, binding);
     log.Info("PE version metadata updated successfully");
     log.Info(options.metadata.icon.empty() ? "PE icon: default icon retained"
                                           : "PE icon updated successfully");
+    log.Info("LWWEB_BINDING resource updated successfully");
 #else
     std::filesystem::permissions(
         staging,
@@ -326,6 +329,9 @@ void PackApplication(const PackOptions& options) {
     Progress(options, "Appending prepared payload");
     AppendPreparedPayload(staging, prepared);
     const auto loaded = LoadPayload(staging);
+#ifdef _WIN32
+    VerifyPePayloadBinding(staging, loaded.footer.sha256);
+#endif
     log.Info("Payload SHA-256: " + HexDigest(loaded.footer.sha256));
     if (!prepared.zip.empty()) std::filesystem::remove(prepared.zip, error);
 

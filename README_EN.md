@@ -360,6 +360,20 @@ Footer             fixed 80 bytes
 
 All integers are explicitly serialized as little endian instead of relying on compiler structure layout. V2 hashes the consecutive Resource ZIP and Manifest JSON bytes, so URL and window-setting changes are detected as well. The Runner remains compatible with the legacy [Payload V1 format](docs/format-v1.md), while new applications are always written as V2.
 
+### Signed Payload Binding
+
+New Windows applications also store the same Payload SHA-256 in the PE
+`LWWEB_BINDING` resource. It uses a fixed 48-byte `LWBIND01` binary format. At
+startup, the Runtime first verifies `ZIP + Manifest` against the Footer and then
+compares the PE Binding digest with the Footer digest. Legacy applications without
+a Binding remain compatible; malformed data, unknown versions or security flags,
+and digest mismatches are rejected.
+
+This stage does not yet set the “Authenticode required” flag. The Binding therefore
+establishes a stable payload association but does not independently prove publisher
+identity. The next Authenticode stage will protect this PE resource and complete the
+certificate → PE Binding → Payload trust chain.
+
 ## Security Boundary
 
 This project packages trusted static web applications. It is not a sandbox for hostile web content.

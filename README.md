@@ -393,6 +393,18 @@ Footer             固定 80 字节
 
 全部整数都以显式小端方式序列化，不依赖 C++ 编译器的结构体对齐规则。V2 的 SHA-256 覆盖 Resource ZIP 与 Manifest JSON 的连续字节，因此 URL、窗口配置等 Manifest 内容被修改时也会被发现。Runner 仍兼容读取旧版 [Payload V1 格式](docs/format-v1.md)，新生成应用统一写入 V2。
 
+### Signed Payload Binding
+
+Windows 新生成应用还会把同一个 Payload SHA-256 写入 PE 的
+`LWWEB_BINDING` 资源。该资源采用固定 48 字节的 `LWBIND01` 二进制格式，
+Runtime 启动时会先验证 `ZIP + Manifest` 与 Footer，再验证 PE Binding 中的摘要
+与 Footer 一致。没有 Binding 的旧应用仍然兼容；损坏、未知版本、未知安全标志或
+摘要不一致都会拒绝启动。
+
+当前阶段的 Binding 尚未设置“必须 Authenticode”标志，因此它建立了稳定的
+Payload 绑定机制，但还不能单独证明发布者身份。下一阶段完成 Authenticode 后，
+该 PE 资源会受到代码签名保护，从而形成“证书 → PE Binding → Payload”的完整信任链。
+
 ## 安全边界
 
 本项目用于打包可信的静态网页应用，不应被视为运行恶意网页内容的安全沙箱。

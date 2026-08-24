@@ -119,6 +119,7 @@ add_library(lwweb_core STATIC
   src/packer/manifest.cpp
   src/packer/payload.cpp
   src/packer/packer.cpp
+  src/pe/payload_binding.cpp
   src/runtime/resource_cache.cpp
   src/runtime/backend_proxy.cpp
   src/runtime/proxy_stream.cpp
@@ -202,6 +203,7 @@ if(BUILD_TESTING)
     tests/cli_tests.cpp
     tests/filesystem_access_tests.cpp
     tests/ipc_tests.cpp
+    tests/payload_binding_tests.cpp
     tests/test_main.cpp
     tests/payload_tests.cpp
     tests/path_tests.cpp

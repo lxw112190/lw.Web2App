@@ -7,6 +7,7 @@
 #include "lwweb/common/path_utils.h"
 #include "lwweb/packer/packer.h"
 #include "lwweb/packer/payload.h"
+#include "lwweb/pe/pe_resources.h"
 #include "lwweb/runtime/resource_server.h"
 #include "lwweb/runtime/single_instance.h"
 #include "lwweb/webview/webview_host.h"
@@ -209,7 +210,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         result = lwweb::RunCommandLine(args, executable, lwweb::CliPlatform::Windows,
                                        std::cout);
     } else if (lwweb::HasPayload(executable)) {
-      result = lwweb::RunPayloadApp(instance, lwweb::LoadPayload(executable));
+      auto payload = lwweb::LoadPayload(executable);
+      lwweb::VerifyPePayloadBinding(executable, payload.footer.sha256);
+      result = lwweb::RunPayloadApp(instance, payload);
       } else {
         result = lwweb::RunPackerGui(instance);
       }
