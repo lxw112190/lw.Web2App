@@ -1,5 +1,6 @@
 #include "lwweb/ipc/filesystem_access.h"
 
+#include "lwweb/common/path_utils.h"
 #include "lwweb/ipc/ipc_message.h"
 
 #include <atomic>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <iomanip>
+#include <optional>
 #include <sstream>
 
 #ifdef _WIN32
@@ -37,6 +39,33 @@ bool OptionalBool(const nlohmann::json& params, const char* name,
 
 std::string PathText(const std::filesystem::path& path) {
   return path.u8string();
+}
+
+IpcException FilesystemError(const std::error_code& error,
+                             const char* operation);
+
+std::filesystem::path AuthorizedRegularFile(
+    const std::shared_ptr<IpcFilesystemPermissions>& permissions,
+    const nlohmann::json& params, const char* operation) {
+  const auto path = permissions->RequireExisting(RequiredString(params, "path"));
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  if (error) throw FilesystemError(error, operation);
+  if (!std::filesystem::is_regular_file(status))
+    throw IpcException("UNSUPPORTED",
+                       std::string(operation) + " supports regular files only");
+  return path;
+}
+
+std::optional<std::int64_t> ModifiedAtMilliseconds(
+    const std::filesystem::path& path) {
+  std::error_code error;
+  const auto modified = std::filesystem::last_write_time(path, error);
+  if (error) return std::nullopt;
+  const auto system_time = std::chrono::time_point_cast<std::chrono::milliseconds>(
+      modified - std::filesystem::file_time_type::clock::now() +
+      std::chrono::system_clock::now());
+  return system_time.time_since_epoch().count();
 }
 
 IpcException FilesystemError(const std::error_code& error,
@@ -178,6 +207,16 @@ void IpcFilesystemAccess::GrantDirectory(
   permissions_->AddSessionGrant(directory);
 }
 
+std::filesystem::path IpcFilesystemAccess::OpenReadPath(
+    const nlohmann::json& params) const {
+  return AuthorizedRegularFile(permissions_, params, "Open read");
+}
+
+std::filesystem::path IpcFilesystemAccess::TrashPath(
+    const nlohmann::json& params) const {
+  return AuthorizedRegularFile(permissions_, params, "Move to trash");
+}
+
 nlohmann::json IpcFilesystemAccess::Exists(
     const nlohmann::json& params) const {
   const auto path = permissions_->RequireDestination(
@@ -215,12 +254,30 @@ nlohmann::json IpcFilesystemAccess::List(
                                                               : "file"}};
     if (std::filesystem::is_regular_file(status)) {
       const auto size = item.file_size(error);
-      if (!error) entry["size"] = size;
+      if (!error) {
+        entry["size"] = size;
+        entry["mime"] = MimeTypeForPath(item.path().filename().u8string());
+      }
     }
+    if (const auto modified = ModifiedAtMilliseconds(item.path()))
+      entry["modifiedAt"] = *modified;
     entries.push_back(std::move(entry));
   }
   if (error) throw FilesystemError(error, "Directory listing");
   return {{"entries", std::move(entries)}};
+}
+
+nlohmann::json IpcFilesystemAccess::MakeDirectory(
+    const nlohmann::json& params) const {
+  const auto path = permissions_->RequireDestination(
+      RequiredString(params, "path"));
+  std::error_code error;
+  if (!std::filesystem::create_directory(path, error)) {
+    if (!error)
+      throw IpcException("ALREADY_EXISTS", "Directory already exists");
+    throw FilesystemError(error, "Create directory");
+  }
+  return {{"path", PathText(path)}};
 }
 
 nlohmann::json IpcFilesystemAccess::Copy(

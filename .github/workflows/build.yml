@@ -132,6 +132,29 @@ jobs:
           if ($inspect.ExitCode -ne 0) {
             throw "Native IPC example inspection failed"
           }
+          $photoOutput = Join-Path $PWD 'dist/lw.Web2App/examples/photo-selector.exe'
+          $photoPack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+            -ArgumentList @(
+              'pack', 'examples/photo-selector', $photoOutput,
+              '--title', '"lw.Web2App 选片 Demo"', '--windowed',
+              '--width', '1280', '--height', '820',
+              '--app-id', 'com.lwweb.examples.photo-selector', '--ipc',
+              '--ipc-capability', 'dialog.directory',
+              '--ipc-capability', 'fs.list',
+              '--ipc-capability', 'fs.read',
+              '--ipc-capability', 'fs.mkdir',
+              '--ipc-capability', 'fs.move',
+              '--ipc-capability', 'fs.trash',
+              '--ipc-capability', 'fs.delete'
+            )
+          if ($photoPack.ExitCode -ne 0 -or -not (Test-Path $photoOutput)) {
+            throw "Photo selector example packaging failed"
+          }
+          $photoInspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+            -ArgumentList @('inspect', $photoOutput)
+          if ($photoInspect.ExitCode -ne 0) {
+            throw "Photo selector example inspection failed"
+          }
 
       - name: Launch generated Windows Runtime and verify Native IPC
         shell: pwsh
@@ -202,7 +225,8 @@ jobs:
           $checksums = @(
             'dist/lw.Web2App/lw.Web2App.exe',
             'dist/lw.Web2App/examples/wechat-article-formatter.exe',
-            'dist/lw.Web2App/examples/native-ipc.exe'
+            'dist/lw.Web2App/examples/native-ipc.exe',
+            'dist/lw.Web2App/examples/photo-selector.exe'
           ) | ForEach-Object {
             $hash = Get-FileHash $_ -Algorithm SHA256
             $root = (Resolve-Path 'dist/lw.Web2App').Path
@@ -323,6 +347,22 @@ jobs:
             dist/lw.Web2App/examples/native-ipc-manifest.json
           grep -q '"app.info"' \
             dist/lw.Web2App/examples/native-ipc-manifest.json
+          ./build/lw.Web2App pack examples/photo-selector \
+            dist/lw.Web2App/examples/photo-selector \
+            --title "lw.Web2App 选片 Demo" --windowed \
+            --width 1280 --height 820 \
+            --app-id com.lwweb.examples.photo-selector --ipc \
+            --ipc-capability dialog.directory \
+            --ipc-capability fs.list \
+            --ipc-capability fs.read \
+            --ipc-capability fs.mkdir \
+            --ipc-capability fs.move \
+            --ipc-capability fs.trash \
+            --ipc-capability fs.delete
+          ./build/lw.Web2App inspect dist/lw.Web2App/examples/photo-selector \
+            > dist/lw.Web2App/examples/photo-selector-manifest.json
+          grep -q '"fs.read"' \
+            dist/lw.Web2App/examples/photo-selector-manifest.json
 
       - name: Smoke test project publish
         run: |
@@ -378,6 +418,7 @@ jobs:
             dist/lw.Web2App/lw.Web2App \
             dist/lw.Web2App/examples/wechat-article-formatter \
             dist/lw.Web2App/examples/native-ipc \
+            dist/lw.Web2App/examples/photo-selector \
             dist/lw.Web2App/examples/*.deb \
             > "dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt"
 

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>lw.Web2App 选片示例</title>
+  <style>
+    :root{color-scheme:dark;font-family:"Segoe UI","Microsoft YaHei",sans-serif;background:#10131a;color:#eef2ff}
+    *{box-sizing:border-box} body{margin:0;min-height:100vh;background:linear-gradient(145deg,#10131a,#161d2b)}
+    button{border:0;border-radius:9px;padding:10px 16px;background:#2d6cdf;color:#fff;cursor:pointer;font-size:14px}
+    button:hover:not(:disabled){filter:brightness(1.12)} button:disabled{opacity:.4;cursor:not-allowed}
+    button.secondary{background:#344054} button.warning{background:#b45309} button.danger{background:#b42318}
+    header{height:70px;padding:14px 22px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #293142;background:#111722e8;position:sticky;top:0;z-index:5}
+    header h1{font-size:20px;margin:0 12px 0 0} #directory{min-width:0;flex:1;color:#aeb9ce;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    main{display:grid;grid-template-columns:minmax(420px,1fr) minmax(300px,420px);gap:18px;padding:18px;height:calc(100vh - 112px)}
+    .panel{background:#171e2b;border:1px solid #293142;border-radius:14px;overflow:hidden;min-height:0}
+    #gallery{padding:14px;display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:12px;overflow:auto;align-content:start;height:100%}
+    .card{padding:0;background:#202838;border:2px solid transparent;border-radius:11px;overflow:hidden;text-align:left;color:#fff}
+    .card.selected{border-color:#55a0ff}.thumb{width:100%;aspect-ratio:4/3;object-fit:cover;background:#0b0f16;display:block}
+    .name{display:block;padding:9px 10px 2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.meta{display:block;padding:0 10px 9px;color:#91a0b8;font-size:12px}
+    aside{padding:18px;display:flex;flex-direction:column;gap:14px}.preview{width:100%;min-height:240px;max-height:52vh;object-fit:contain;background:#0b0f16;border-radius:10px}
+    #selected-name{font-size:16px;font-weight:600;word-break:break-all}.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.actions button{width:100%}
+    #empty{color:#91a0b8;text-align:center;padding:80px 20px;grid-column:1/-1}.status{height:42px;padding:11px 22px;border-top:1px solid #293142;color:#9ba9bf;background:#111722}
+    .status.error{color:#ff9b91}.hint{font-size:12px;color:#91a0b8;line-height:1.6;margin-top:auto}
+    @media(max-width:860px){main{grid-template-columns:1fr;height:auto}.panel{min-height:420px}aside{min-height:520px}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>选片 Demo</h1>
+    <button id="choose">选择图片目录</button>
+    <button id="refresh" class="secondary" disabled>刷新</button>
+    <button id="mkdir" class="secondary" disabled>新建分类目录</button>
+    <div id="directory">尚未选择目录</div>
+  </header>
+  <main>
+    <section class="panel"><div id="gallery"><div id="empty">请选择一个包含图片的目录</div></div></section>
+    <aside class="panel">
+      <img id="preview" class="preview" alt="图片预览">
+      <div id="selected-name">尚未选择图片</div>
+      <div class="actions">
+        <button id="move" disabled>移动到其他目录</button>
+        <button id="trash" class="warning" disabled>移入回收站</button>
+        <button id="remove" class="danger" disabled>永久删除</button>
+      </div>
+      <div class="hint">本示例只读取所选目录的直接子项。图片通过随机 File Grant 流式预览；“移入回收站”可以恢复，“永久删除”不可恢复。</div>
+    </aside>
+  </main>
+  <div id="status" class="status">正在检查 Native IPC…</div>
+  <script>
+    const $=selector=>document.querySelector(selector);
+    const gallery=$('#gallery'),preview=$('#preview'),status=$('#status');
+    const imageExtensions=new Set(['jpg','jpeg','png','gif','webp','bmp','avif','tif','tiff']);
+    let directory='',entries=[],selected=null,grants=new Map(),thumbnailObserver=null;
+
+    function setStatus(message,error=false){status.textContent=message;status.classList.toggle('error',error)}
+    function formatSize(bytes){if(bytes<1024)return `${bytes} B`;if(bytes<1048576)return `${(bytes/1024).toFixed(1)} KB`;return `${(bytes/1048576).toFixed(1)} MB`}
+    function isImage(entry){const ext=entry.name.includes('.')?entry.name.split('.').pop().toLowerCase():'';return entry.type==='file'&&((entry.mime||'').startsWith('image/')||imageExtensions.has(ext))}
+    function joinPath(root,name){return root.replace(/[\\/]$/,'')+'/'+name}
+    async function invoke(method,params){try{return await window.lw.invoke(method,params)}catch(error){setStatus(`${error.code||'ERROR'}：${error.message}`,true);throw error}}
+    async function revoke(id){if(!id)return;try{await invoke('file.revoke',{id})}catch(_){}for(const [path,grant] of grants)if(grant.id===id)grants.delete(path)}
+    async function revokeAll(){const ids=[...grants.keys()];grants.clear();await Promise.allSettled(ids.map(id=>window.lw.invoke('file.revoke',{id})))}
+    function updateActions(){const enabled=!!selected;['#move','#trash','#remove'].forEach(id=>$(id).disabled=!enabled);$('#selected-name').textContent=selected?selected.name:'尚未选择图片'}
+
+    async function selectEntry(entry,card){
+      selected=entry;document.querySelectorAll('.card').forEach(item=>item.classList.remove('selected'));card.classList.add('selected');
+      const grant=grants.get(entry.path)||await invoke('fs.openRead',{path:entry.path});
+      grants.set(entry.path,grant);preview.src=grant.url;updateActions();setStatus(`已选择：${entry.name}`);
+    }
+
+    function observeThumbnail(entry,img){
+      thumbnailObserver.observe(img);img._loadPreview=async()=>{if(img.src)return;try{const grant=grants.get(entry.path)||await invoke('fs.openRead',{path:entry.path});grants.set(entry.path,grant);img.src=grant.url}catch(_){img.alt='预览失败'}};
+    }
+
+    async function render(){
+      thumbnailObserver?.disconnect();thumbnailObserver=new IntersectionObserver(changes=>{for(const change of changes)if(change.isIntersecting){thumbnailObserver.unobserve(change.target);change.target._loadPreview?.()}},{root:gallery,rootMargin:'160px'});
+      gallery.replaceChildren();selected=null;preview.removeAttribute('src');updateActions();
+      if(!entries.length){const empty=document.createElement('div');empty.id='empty';empty.textContent='目录中没有可显示的图片';gallery.append(empty);return}
+      for(const entry of entries){
+        const card=document.createElement('button');card.className='card';card.type='button';
+        const img=document.createElement('img');img.className='thumb';img.alt='';
+        const name=document.createElement('span');name.className='name';name.textContent=entry.name;
+        const meta=document.createElement('span');meta.className='meta';meta.textContent=formatSize(entry.size||0);
+        card.append(img,name,meta);card.onclick=()=>selectEntry(entry,card);gallery.append(card);observeThumbnail(entry,img);
+      }
+    }
+
+    async function refresh(){
+      if(!directory)return;setStatus('正在读取目录…');await revokeAll();
+      const result=await invoke('fs.list',{path:directory});const all=result.entries.filter(isImage).sort((a,b)=>a.name.localeCompare(b.name,'zh-CN',{numeric:true}));entries=all.slice(0,300);
+      await render();setStatus(all.length>entries.length?`共找到 ${all.length} 张图片，Demo 当前显示前 ${entries.length} 张`:`共找到 ${entries.length} 张图片`);
+    }
+
+    $('#choose').onclick=async()=>{const result=await invoke('dialog.selectDirectory');directory=result.path;$('#directory').textContent=directory;$('#refresh').disabled=false;$('#mkdir').disabled=false;await refresh()};
+    $('#refresh').onclick=refresh;
+    $('#mkdir').onclick=async()=>{const name=prompt('请输入分类目录名称，例如：已选');if(!name)return;if(name==='.'||name==='..'||/[\\/]/.test(name)){setStatus('目录名称不能包含路径分隔符',true);return}await invoke('fs.mkdir',{path:joinPath(directory,name)});setStatus(`目录已创建：${name}`)};
+    $('#move').onclick=async()=>{if(!selected)return;const source=selected;const target=await invoke('dialog.selectDirectory');if(!confirm(`把“${source.name}”移动到：\n${target.path}\n\n是否继续？`))return;const grant=grants.get(source.path);if(grant)await revoke(grant.id);await invoke('fs.move',{from:source.path,to:joinPath(target.path,source.name),overwrite:false});await refresh()};
+    $('#trash').onclick=async()=>{if(!selected||!confirm(`把“${selected.name}”移入系统回收站？`))return;const source=selected;const grant=grants.get(source.path);if(grant)await revoke(grant.id);await invoke('fs.trash',{path:source.path});await refresh()};
+    $('#remove').onclick=async()=>{if(!selected||!confirm(`将永久删除“${selected.name}”，此操作不可恢复。\n\n确定继续？`))return;if(!confirm('最后确认：确实要永久删除这张图片吗？'))return;const source=selected;const grant=grants.get(source.path);if(grant)await revoke(grant.id);await invoke('fs.delete',{path:source.path,recursive:false});await refresh()};
+    window.addEventListener('beforeunload',()=>{for(const grant of grants.values())window.lw?.invoke('file.revoke',{id:grant.id}).catch(()=>{})});
+    if(!window.lw){setStatus('未检测到 Native IPC，请使用 lw.Web2App 打包后运行。',true)}else{setStatus('Native IPC 已连接，请选择图片目录。')}
+  </script>
+</body>
+</html>

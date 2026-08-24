@@ -66,19 +66,22 @@ void RunIpcTests() {
     std::ofstream(root / "folder" / "before.txt") << "ipc";
     std::ofstream(grant_root / std::filesystem::u8path(u8"本地文档.pdf"),
                   std::ios::binary) << "%PDF-local-file-bridge";
+    std::ofstream(root / "folder" / "trash-me.jpg", std::ios::binary)
+        << "jpeg-placeholder";
   }
 
   lwweb::Manifest manifest;
   manifest.app_id = "test.ipc.app";
   manifest.title = "IPC Test";
   manifest.ipc.enabled = true;
-  manifest.ipc.capabilities = {"app.info", "dialog.directory", "dialog.file", "fs.exists",
-                               "fs.list", "fs.copy", "fs.move", "fs.delete"};
+  manifest.ipc.capabilities = {
+      "app.info", "dialog.directory", "dialog.file", "fs.exists", "fs.list", "fs.read",
+      "fs.mkdir", "fs.copy", "fs.move", "fs.trash", "fs.delete"};
   manifest.ipc.filesystem_roots = {root.u8string()};
   lwweb::ValidateManifest(manifest);
   const auto round_trip =
       lwweb::ParseManifest(lwweb::SerializeManifest(manifest));
-  Check(round_trip.ipc.enabled && round_trip.ipc.capabilities.size() == 8 &&
+  Check(round_trip.ipc.enabled && round_trip.ipc.capabilities.size() == 11 &&
             round_trip.ipc.filesystem_roots.size() == 1,
         "IPC manifest configuration round-trips");
 
@@ -98,6 +101,10 @@ void RunIpcTests() {
                                std::vector<std::string>{"*"};
     return std::optional<std::vector<std::filesystem::path>>({selected_file});
   };
+  const auto trashed_file = grant_root / "trashed.jpg";
+  services.trash_file = [trashed_file](const std::filesystem::path& path) {
+    std::filesystem::rename(path, trashed_file);
+  };
   services.file_grants = std::make_shared<lwweb::LocalFileGrantManager>();
   lwweb::IpcDispatcher dispatcher(manifest, services);
   const auto info = dispatcher.Dispatch(request);
@@ -112,7 +119,20 @@ void RunIpcTests() {
         "directory dialog creates a session grant");
   const auto granted_list = dispatcher.Dispatch(
       {"grant-list", "fs.list", {{"path", grant_root.u8string()}}});
-  Check(granted_list.ok, "session grant authorizes a selected directory");
+  Check(granted_list.ok && granted_list.result["entries"][0].contains("modifiedAt") &&
+            granted_list.result["entries"][0]["mime"] == "application/pdf",
+        "fs.list returns authorized entries with preview metadata");
+  const auto read_grant = dispatcher.Dispatch(
+      {"open-read", "fs.openRead", {{"path", selected_file.u8string()}}});
+  Check(read_grant.ok && read_grant.result["name"] == u8"本地文档.pdf" &&
+            read_grant.result["url"].get<std::string>().rfind("/__lw_file__/", 0) == 0 &&
+            !read_grant.result.contains("path"),
+        "fs.openRead creates an opaque HTTP grant for an authorized file");
+  const auto read_grant_id = read_grant.result["id"].get<std::string>();
+  const auto read_revoked = dispatcher.Dispatch(
+      {"revoke-read", "file.revoke", {{"id", read_grant_id}}});
+  Check(read_revoked.ok && read_revoked.result["revoked"] == true,
+        "fs.read capability can revoke its local file grant");
   const auto opened = dispatcher.Dispatch(
       {"open-file", "dialog.openFile",
        {{"multiple", false},
@@ -141,8 +161,13 @@ void RunIpcTests() {
         "dialog.openFile rejects unsafe filter extensions before opening UI");
 
   auto list = dispatcher.Dispatch({"list", "fs.list", {{"path", (root / "folder").u8string()}}});
-  Check(list.ok && list.result["entries"].size() == 1,
+  Check(list.ok && list.result["entries"].size() == 2,
         "fs.list reads an authorized directory");
+  const auto created_directory = root / "folder" / "selected";
+  auto created = dispatcher.Dispatch(
+      {"mkdir", "fs.mkdir", {{"path", created_directory.u8string()}}});
+  Check(created.ok && std::filesystem::is_directory(created_directory),
+        "fs.mkdir creates a direct child inside an authorized root");
   auto moved = dispatcher.Dispatch(
       {"move", "fs.move", {{"from", (root / "folder" / "before.txt").u8string()},
                               {"to", (root / "folder" / "after.txt").u8string()}}});
@@ -152,6 +177,11 @@ void RunIpcTests() {
       {"delete", "fs.delete", {{"path", (root / "folder" / "after.txt").u8string()}}});
   Check(removed.ok && !std::filesystem::exists(root / "folder" / "after.txt"),
         "fs.delete operates inside an authorized root");
+  auto trashed = dispatcher.Dispatch(
+      {"trash", "fs.trash", {{"path", (root / "folder" / "trash-me.jpg").u8string()}}});
+  Check(trashed.ok && !std::filesystem::exists(root / "folder" / "trash-me.jpg") &&
+            std::filesystem::exists(trashed_file),
+        "fs.trash validates the file then delegates to the platform Trash service");
   const auto outside = root.parent_path() / "lwweb-ipc-outside.txt";
   std::ofstream(outside) << "outside";
   auto denied = dispatcher.Dispatch(

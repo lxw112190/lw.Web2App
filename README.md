@@ -389,7 +389,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
 - `--ipc`：为本地打包模式启用 Native IPC；在线 URL 模式禁止启用。
-- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`dialog.file`、`fs.exists`、`fs.list`、`fs.copy`、`fs.move`、`fs.delete`。
+- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`dialog.file`、`fs.exists`、`fs.list`、`fs.read`、`fs.mkdir`、`fs.copy`、`fs.move`、`fs.trash`、`fs.delete`。
 - `--ipc-root`：重复传入文件系统固定根目录；支持 `${HOME}`、`${DESKTOP}`、`${DOCUMENTS}`、`${PICTURES}`、`${DOWNLOADS}`、`${APP_DATA}`、`${APP_CACHE}`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
@@ -442,18 +442,45 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability dialog.file `
   --ipc-capability fs.exists `
   --ipc-capability fs.list `
+  --ipc-capability fs.read `
+  --ipc-capability fs.mkdir `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
+  --ipc-capability fs.trash `
   --ipc-capability fs.delete
 ```
 
 系统目录选择会创建仅本次运行有效的 Session Grant；本地文件桥通过随机 File Grant
-和同源 HTTP Range 流式提供大型文件，不把真实磁盘路径交给网页。`fs.move` 对普通文件
-支持跨磁盘/跨文件系统的安全 copy + delete 回退。
+和同源 HTTP Range 流式提供大型文件；`fs.openRead` 还能为授权目录中的图片创建预览
+URL。`fs.move` 对普通文件支持跨磁盘/跨文件系统的安全 copy + delete 回退，`fs.trash`
+将普通文件放入系统回收站且不会静默永久删除。
+
+仓库还提供一个可运行的[选片与废片管理 Demo](examples/photo-selector/index.html)，演示
+目录选取、图片预览、移动、回收站删除、永久删除和新建分类目录。
+
+打包选片 Demo：
+
+```powershell
+lw.Web2App.exe pack .\examples\photo-selector .\photo-selector.exe `
+  --title "lw.Web2App 选片 Demo" --windowed `
+  --width 1280 --height 820 `
+  --app-id com.lwweb.examples.photo-selector --ipc `
+  --ipc-capability dialog.directory `
+  --ipc-capability fs.list `
+  --ipc-capability fs.read `
+  --ipc-capability fs.mkdir `
+  --ipc-capability fs.move `
+  --ipc-capability fs.trash `
+  --ipc-capability fs.delete
+```
+
+选片业务应优先使用 `fs.trash`，让误删文件可从系统回收站恢复。如果页面不需要
+“永久删除”功能，可省略 `--ipc-capability fs.delete`，从权限层面禁止该操作。
 
 完整的 Capability 表、参数、返回值、错误码、安全边界和文件桥示例见
 **[Native IPC 中文指南](docs/native-ipc.md)**；也可查看
-[English guide](docs/native-ipc_EN.md) 和[可运行示例](examples/native-ipc/index.html)。
+[English guide](docs/native-ipc_EN.md)、[基础示例](examples/native-ipc/index.html)和
+[选片示例](examples/photo-selector/index.html)。
 
 ## Payload V2 格式
 

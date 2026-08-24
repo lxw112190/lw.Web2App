@@ -363,15 +363,18 @@ struct IpcCapabilityControl {
   const char* capability;
 };
 
-constexpr std::array<IpcCapabilityControl, 8> kIpcCapabilityControls{{
+constexpr std::array<IpcCapabilityControl, 11> kIpcCapabilityControls{{
     {kIpcCapabilityFirst + 0, L"获取应用信息", "app.info"},
     {kIpcCapabilityFirst + 1, L"选择本地文件", "dialog.file"},
     {kIpcCapabilityFirst + 2, L"选择本地文件夹", "dialog.directory"},
     {kIpcCapabilityFirst + 3, L"检查文件是否存在", "fs.exists"},
     {kIpcCapabilityFirst + 4, L"浏览文件夹内容", "fs.list"},
-    {kIpcCapabilityFirst + 5, L"复制文件", "fs.copy"},
-    {kIpcCapabilityFirst + 6, L"移动文件", "fs.move"},
-    {kIpcCapabilityFirst + 7, L"删除文件（高风险）", "fs.delete"},
+    {kIpcCapabilityFirst + 5, L"预览授权文件", "fs.read"},
+    {kIpcCapabilityFirst + 6, L"创建文件夹", "fs.mkdir"},
+    {kIpcCapabilityFirst + 7, L"复制文件", "fs.copy"},
+    {kIpcCapabilityFirst + 8, L"移动文件", "fs.move"},
+    {kIpcCapabilityFirst + 9, L"移入回收站（推荐）", "fs.trash"},
+    {kIpcCapabilityFirst + 10, L"永久删除（高风险）", "fs.delete"},
 }};
 
 // Native IPC 权限弹窗的临时状态。只有点击“保存”后才会回写主窗口，
@@ -457,18 +460,18 @@ void BuildIpcSettingsInterface(IpcDialogState& state) {
                       116, 82, 150, 32, kIpcPresetReadOnly, state.body_font);
   AddIpcDialogControl(state, L"BUTTON", L"文件夹浏览", WS_TABSTOP,
                       276, 82, 150, 32, kIpcPresetBrowse, state.body_font);
-  AddIpcDialogControl(state, L"BUTTON", L"完整文件管理", WS_TABSTOP,
+  AddIpcDialogControl(state, L"BUTTON", L"安全文件管理", WS_TABSTOP,
                       436, 82, 160, 32, kIpcPresetManage, state.body_font);
 
   AddIpcDialogControl(state, L"STATIC", L"授权能力", SS_LEFT | SS_NOPREFIX,
                       24, 130, 120, 22, 0, state.body_font);
   for (std::size_t index = 0; index < kIpcCapabilityControls.size(); ++index) {
     const auto& item = kIpcCapabilityControls[index];
-    const bool right = index >= 4;
+    const int column = static_cast<int>(index / 4);
     const int row = static_cast<int>(index % 4);
     AddIpcDialogControl(state, L"BUTTON", item.label,
                         WS_TABSTOP | BS_AUTOCHECKBOX,
-                        right ? 358 : 32, 158 + row * 32, 260, 24,
+                        32 + column * 214, 158 + row * 32, 205, 24,
                         item.id, state.body_font);
   }
 
@@ -515,12 +518,14 @@ LRESULT CALLBACK IpcSettingsWindowProc(HWND window, UINT message,
           return 0;
         case kIpcPresetBrowse:
           SetIpcDialogPreset(
-              window, {"app.info", "dialog.directory", "fs.exists", "fs.list"});
+              window, {"app.info", "dialog.directory", "fs.exists", "fs.list",
+                       "fs.read"});
           return 0;
         case kIpcPresetManage: {
           std::vector<std::string> all;
           for (const auto& item : kIpcCapabilityControls)
-            all.emplace_back(item.capability);
+            if (std::strcmp(item.capability, "fs.delete") != 0)
+              all.emplace_back(item.capability);
           SetIpcDialogPreset(window, all);
           return 0;
         }

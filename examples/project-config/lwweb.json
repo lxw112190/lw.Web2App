@@ -29,8 +29,11 @@
         "dialog.file",
         "fs.exists",
         "fs.list",
+        "fs.read",
+        "fs.mkdir",
         "fs.copy",
         "fs.move",
+        "fs.trash",
         "fs.delete"
       ],
       "filesystem_roots": []

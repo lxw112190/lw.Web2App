@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(lw.Web2App VERSION 0.2.4 LANGUAGES C CXX)
+project(lw.Web2App VERSION 0.2.5 LANGUAGES C CXX)
 
 configure_file(resources/version.h.in generated/lwweb/version.h @ONLY)
 if(WIN32)

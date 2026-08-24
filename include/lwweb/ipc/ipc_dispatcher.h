@@ -38,6 +38,7 @@ struct IpcRuntimeServices {
   std::function<std::optional<std::filesystem::path>()> select_directory;
   std::function<std::optional<std::vector<std::filesystem::path>>(
       const OpenFileDialogOptions&)> open_files;
+  std::function<void(const std::filesystem::path&)> trash_file;
   std::shared_ptr<LocalFileGrantManager> file_grants;
 };
 

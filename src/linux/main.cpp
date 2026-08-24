@@ -241,6 +241,23 @@ std::optional<std::vector<std::filesystem::path>> ChooseIpcFiles(
   return selected;
 }
 
+void MoveFileToTrash(const std::filesystem::path& path) {
+  auto* file = g_file_new_for_path(path.c_str());
+  if (!file)
+    throw IpcException("UNSUPPORTED", "System Trash is unavailable");
+  GError* error = nullptr;
+  const bool moved = g_file_trash(file, nullptr, &error);
+  g_object_unref(file);
+  if (!moved) {
+    const bool unsupported = error && error->domain == G_IO_ERROR &&
+                             error->code == G_IO_ERROR_NOT_SUPPORTED;
+    g_clear_error(&error);
+    throw IpcException(unsupported ? "UNSUPPORTED" : "IO_ERROR",
+                       unsupported ? "System Trash is unavailable"
+                                   : "Move to Trash failed");
+  }
+}
+
 void OnIpcScriptMessage(WebKitUserContentManager*, WebKitJavascriptResult* result,
                         gpointer data) {
   auto* state = static_cast<RuntimeState*>(data);
@@ -484,6 +501,7 @@ int RunPayloadApp(const LoadedPayload& payload) {
     services.open_files = [window](const OpenFileDialogOptions& options) {
       return ChooseIpcFiles(window, options);
     };
+    services.trash_file = MoveFileToTrash;
     services.file_grants = file_grants;
     state.ipc_dispatcher =
         std::make_shared<IpcDispatcher>(payload.manifest, std::move(services));

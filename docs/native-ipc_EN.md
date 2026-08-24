@@ -26,8 +26,11 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability dialog.file `
   --ipc-capability fs.exists `
   --ipc-capability fs.list `
+  --ipc-capability fs.read `
+  --ipc-capability fs.mkdir `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
+  --ipc-capability fs.trash `
   --ipc-capability fs.delete
 ```
 
@@ -65,10 +68,13 @@ Enabling IPC does not grant every method. Capabilities are declared at package t
 | `dialog.directory` | `dialog.selectDirectory` | Open the directory picker and create a Session Grant |
 | `dialog.file` | `dialog.openFile`, `file.revoke` | Select files and manage read-only File Grants |
 | `fs.exists` | `fs.exists` | Check an authorized path |
-| `fs.list` | `fs.list` | List direct children of an authorized directory |
+| `fs.list` | `fs.list` | List direct children with size, MIME, and modification time |
+| `fs.read` | `fs.openRead`, `file.revoke` | Create a read-only HTTP File Grant for an authorized regular file |
+| `fs.mkdir` | `fs.mkdir` | Create one direct child directory inside an authorized directory |
 | `fs.copy` | `fs.copy` | Copy a regular file |
 | `fs.move` | `fs.move` | Move a regular file or a same-filesystem directory |
-| `fs.delete` | `fs.delete` | Delete an authorized path |
+| `fs.trash` | `fs.trash` | Move an authorized regular file to the system Trash/Recycle Bin |
+| `fs.delete` | `fs.delete` | Permanently delete an authorized path (high risk) |
 
 Use repeatable `--ipc-root` options for fixed filesystem roots:
 
@@ -92,6 +98,12 @@ const info = await lw.invoke("app.getInfo");
 const selected = await lw.invoke("dialog.selectDirectory");
 const state = await lw.invoke("fs.exists", { path: selected.path + "/a.txt" });
 const listing = await lw.invoke("fs.list", { path: selected.path });
+const preview = await lw.invoke("fs.openRead", {
+  path: selected.path + "/photo.jpg"
+});
+document.querySelector("img").src = preview.url;
+
+await lw.invoke("fs.mkdir", { path: selected.path + "/selected" });
 
 await lw.invoke("fs.copy", {
   from: selected.path + "/a.txt",
@@ -105,6 +117,10 @@ await lw.invoke("fs.move", {
   overwrite: true
 });
 
+await lw.invoke("fs.trash", {
+  path: selected.path + "/rejected.jpg"
+});
+
 await lw.invoke("fs.delete", {
   path: selected.path + "/archive/a.txt",
   recursive: false
@@ -116,7 +132,10 @@ crossing a disk or filesystem boundary falls back to “copy to a destination-si
 temporary file, publish the complete destination, then delete the source.” Existing
 destinations require `overwrite: true`. If source deletion fails, the complete target
 is retained and `IO_ERROR` is returned. Cross-filesystem directory moves return
-`UNSUPPORTED`. `fs.delete` is non-recursive unless `recursive: true` is specified.
+`UNSUPPORTED`. `fs.mkdir` creates one child whose parent already exists. `fs.trash`
+accepts regular files only and never silently falls back to permanent deletion when the
+desktop Trash is unavailable. `fs.delete` is non-recursive unless `recursive: true` is
+specified.
 
 File dialog options and their stable result shape are:
 
@@ -136,8 +155,9 @@ files, and canceling a picker returns `USER_CANCELLED`.
 
 ## Controlled Local File Bridge
 
-Large files should not cross JSON IPC as Base64. `dialog.openFile` creates a random,
-process-local grant and returns a same-origin HTTP streaming URL:
+Large files should not cross JSON IPC as Base64. `dialog.openFile` grants a directly
+selected file, while `fs.openRead` grants a regular file below an authorized directory.
+Both return a random, process-local, same-origin HTTP streaming URL:
 
 ```js
 const file = opened.files[0];
@@ -145,6 +165,9 @@ const file = opened.files[0];
 const loadingTask = pdfjsLib.getDocument({ url: file.url });
 await lw.invoke("file.revoke", { id: file.id });
 ```
+
+`fs.openRead` returns the same `{ id, name, size, mime, url }` shape. `file.revoke` is
+available when either `dialog.file` or `fs.read` is granted.
 
 The page never receives the disk path. `/__lw_file__/` accepts `GET` and `HEAD`, one
 fixed, open-ended, or suffix byte range, and returns the appropriate `200`, `206`,

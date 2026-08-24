@@ -170,7 +170,9 @@ nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
     return {{"files", std::move(files)}};
   }
   if (request.method == "file.revoke") {
-    RequireCapability("dialog.file");
+    if (!HasIpcCapability(manifest_.ipc, "dialog.file") &&
+        !HasIpcCapability(manifest_.ipc, "fs.read"))
+      throw IpcException("PERMISSION_DENIED", "Native capability is not granted");
     if (!services_.file_grants)
       throw IpcException("UNSUPPORTED", "Local file grants are unavailable");
     const auto id = request.params.find("id");
@@ -187,6 +189,23 @@ nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
     RequireCapability("fs.list");
     return filesystem_->List(request.params);
   }
+  if (request.method == "fs.openRead") {
+    RequireCapability("fs.read");
+    if (!services_.file_grants)
+      throw IpcException("UNSUPPORTED", "Local file grants are unavailable");
+    try {
+      return PublicGrant(
+          services_.file_grants->Create(filesystem_->OpenReadPath(request.params)));
+    } catch (const IpcException&) {
+      throw;
+    } catch (const std::exception&) {
+      throw IpcException("IO_ERROR", "Authorized file cannot be opened");
+    }
+  }
+  if (request.method == "fs.mkdir") {
+    RequireCapability("fs.mkdir");
+    return filesystem_->MakeDirectory(request.params);
+  }
   if (request.method == "fs.copy") {
     RequireCapability("fs.copy");
     return filesystem_->Copy(request.params);
@@ -194,6 +213,14 @@ nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
   if (request.method == "fs.move") {
     RequireCapability("fs.move");
     return filesystem_->Move(request.params);
+  }
+  if (request.method == "fs.trash") {
+    RequireCapability("fs.trash");
+    if (!services_.trash_file)
+      throw IpcException("UNSUPPORTED", "System trash is unavailable");
+    const auto path = filesystem_->TrashPath(request.params);
+    services_.trash_file(path);
+    return nlohmann::json::object();
   }
   if (request.method == "fs.delete") {
     RequireCapability("fs.delete");

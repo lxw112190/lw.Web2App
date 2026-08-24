@@ -23,8 +23,11 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability dialog.file `
   --ipc-capability fs.exists `
   --ipc-capability fs.list `
+  --ipc-capability fs.read `
+  --ipc-capability fs.mkdir `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
+  --ipc-capability fs.trash `
   --ipc-capability fs.delete
 ```
 
@@ -62,10 +65,13 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
 | `dialog.directory` | `dialog.selectDirectory` | 打开系统目录选择器，并创建会话目录授权 |
 | `dialog.file` | `dialog.openFile`、`file.revoke` | 选择本地文件并管理只读 File Grant |
 | `fs.exists` | `fs.exists` | 检查授权路径是否存在 |
-| `fs.list` | `fs.list` | 列出授权目录的直接子项 |
+| `fs.list` | `fs.list` | 列出授权目录的直接子项及大小、MIME、修改时间 |
+| `fs.read` | `fs.openRead`、`file.revoke` | 为授权普通文件创建只读 HTTP File Grant |
+| `fs.mkdir` | `fs.mkdir` | 在授权目录中创建直接子目录 |
 | `fs.copy` | `fs.copy` | 复制普通文件 |
 | `fs.move` | `fs.move` | 移动普通文件或同文件系统目录 |
-| `fs.delete` | `fs.delete` | 删除授权路径 |
+| `fs.trash` | `fs.trash` | 将授权普通文件移入系统回收站/Trash |
+| `fs.delete` | `fs.delete` | 永久删除授权路径（高风险） |
 
 固定文件系统根目录使用可重复的 `--ipc-root` 指定：
 
@@ -110,6 +116,13 @@ const opened = await lw.invoke("dialog.openFile", {
 const state = await lw.invoke("fs.exists", { path: selected.path + "/a.txt" });
 const listing = await lw.invoke("fs.list", { path: selected.path });
 
+const preview = await lw.invoke("fs.openRead", {
+  path: selected.path + "/photo.jpg"
+});
+document.querySelector("img").src = preview.url;
+
+await lw.invoke("fs.mkdir", { path: selected.path + "/已选" });
+
 await lw.invoke("fs.copy", {
   from: selected.path + "/a.txt",
   to: selected.path + "/a-copy.txt",
@@ -120,6 +133,10 @@ await lw.invoke("fs.move", {
   from: selected.path + "/a-copy.txt",
   to: selected.path + "/archive/a.txt",
   overwrite: true
+});
+
+await lw.invoke("fs.trash", {
+  path: selected.path + "/废片.jpg"
 });
 
 await lw.invoke("fs.delete", {
@@ -134,14 +151,17 @@ await lw.invoke("fs.delete", {
 失败，完整目标会被保留并返回 `IO_ERROR`，不会为了回滚而删除已经发布的数据。
 跨文件系统移动目录暂不支持，并返回 `UNSUPPORTED`。
 
-`fs.delete` 默认不递归；删除非空目录必须显式传入 `recursive: true`。所有路径都会在
+`fs.mkdir` 只创建父目录已经存在的直接子目录。`fs.trash` 仅接受普通文件，在 Windows
+进入回收站，在 Linux 使用桌面环境的 Trash；系统不支持回收站时返回 `UNSUPPORTED`，
+不会静默改成永久删除。`fs.delete` 默认不递归；删除非空目录必须显式传入
+`recursive: true`。所有路径都会在
 每次调用时重新校验，源路径和目标路径都必须位于固定根目录或 Session Grant 内。
 
 ## 受控本地文件桥
 
-大型 PDF、视频、图片和音频不应经过 JSON/Base64 IPC。`dialog.openFile` 只负责显示
-系统窗口并创建当前进程有效的随机授权，文件内容由同源 localhost HTTP 数据面流式
-提供：
+大型 PDF、视频、图片和音频不应经过 JSON/Base64 IPC。`dialog.openFile` 可为用户直接
+选择的文件创建授权；`fs.openRead` 可为 `dialog.selectDirectory` 已授权目录中的普通
+文件创建授权。文件内容都由同源 localhost HTTP 数据面流式提供：
 
 ```js
 const result = await lw.invoke("dialog.openFile", {
@@ -154,6 +174,9 @@ const file = result.files[0];
 const loadingTask = pdfjsLib.getDocument({ url: file.url });
 await lw.invoke("file.revoke", { id: file.id });
 ```
+
+`fs.openRead` 返回相同的 `{ id, name, size, mime, url }` 结构，适合图片目录、PDF
+资料库和媒体列表。`file.revoke` 可由 `dialog.file` 或 `fs.read` 任一能力授权。
 
 网页不会得到真实磁盘路径，URL 中的显示文件名也不参与磁盘定位。`/__lw_file__/`
 只接受 `GET` 和 `HEAD`，支持单个固定、开放结束或 suffix Range，并返回正确的

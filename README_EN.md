@@ -382,7 +382,7 @@ Additional options:
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
 - `--ipc`: enable Native IPC for a local package; URL mode cannot enable it.
-- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `dialog.file`, `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, or `fs.delete`.
+- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `dialog.file`, `fs.exists`, `fs.list`, `fs.read`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, or `fs.delete`.
 - `--ipc-root`: repeat for each fixed filesystem root; `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`, `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}` are supported.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
@@ -436,20 +436,47 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability dialog.file `
   --ipc-capability fs.exists `
   --ipc-capability fs.list `
+  --ipc-capability fs.read `
+  --ipc-capability fs.mkdir `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
+  --ipc-capability fs.trash `
   --ipc-capability fs.delete
 ```
 
 Directory selection creates a process-local Session Grant. The Local File Bridge uses
-random File Grants and same-origin HTTP Range streaming for large files without exposing
-disk paths. `fs.move` supports a safe copy-and-delete fallback when a regular file crosses
-a disk or filesystem boundary.
+random File Grants and same-origin HTTP Range streaming for large files. `fs.openRead`
+also creates preview URLs for files below authorized directories. `fs.move` supports a
+safe copy-and-delete fallback across filesystems, while `fs.trash` uses the system Trash
+without silently falling back to permanent deletion.
+
+A runnable [photo-selection demo](examples/photo-selector/index.html) covers directory
+selection, image preview, move, Trash, permanent deletion, and category-directory creation.
+
+Package the photo-selection demo:
+
+```powershell
+lw.Web2App.exe pack .\examples\photo-selector .\photo-selector.exe `
+  --title "lw.Web2App Photo Selector Demo" --windowed `
+  --width 1280 --height 820 `
+  --app-id com.lwweb.examples.photo-selector --ipc `
+  --ipc-capability dialog.directory `
+  --ipc-capability fs.list `
+  --ipc-capability fs.read `
+  --ipc-capability fs.mkdir `
+  --ipc-capability fs.move `
+  --ipc-capability fs.trash `
+  --ipc-capability fs.delete
+```
+
+Photo-selection workflows should prefer `fs.trash`, allowing accidental deletions to be
+recovered from the system Trash. If permanent deletion is unnecessary, omit
+`--ipc-capability fs.delete` so the operation is denied at the capability boundary.
 
 See the **[complete Native IPC guide](docs/native-ipc_EN.md)** for capabilities,
 parameters, results, errors, security boundaries, and File Bridge examples. A
-[Chinese guide](docs/native-ipc.md) and the [runnable example](examples/native-ipc/index.html)
-are also available.
+[Chinese guide](docs/native-ipc.md), the [basic example](examples/native-ipc/index.html),
+and the [photo-selection demo](examples/photo-selector/index.html) are also available.
 
 ## Payload V2 Format
 

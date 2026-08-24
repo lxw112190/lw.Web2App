@@ -9,6 +9,7 @@
 
 #include <ShlObj.h>
 #include <ShObjIdl.h>
+#include <Shellapi.h>
 
 #include <filesystem>
 #include <iterator>
@@ -183,6 +184,38 @@ std::optional<std::vector<std::filesystem::path>> ChooseFiles(
   return selected;
 }
 
+// 使用 Windows Shell 执行真正的“移入回收站”，而不是在无法回收时静默
+// 回退为永久删除。该函数运行在 IPC Worker 线程，因此单独初始化 COM。
+void MoveFileToRecycleBin(const std::filesystem::path& path) {
+  const auto initialized = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE)
+    throw IpcException("UNSUPPORTED", "Windows Recycle Bin is unavailable");
+  struct ComCleanup {
+    bool active;
+    ~ComCleanup() {
+      if (active) CoUninitialize();
+    }
+  } cleanup{SUCCEEDED(initialized)};
+
+  Microsoft::WRL::ComPtr<IFileOperation> operation;
+  if (FAILED(CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&operation))))
+    throw IpcException("UNSUPPORTED", "Windows Recycle Bin is unavailable");
+  const DWORD flags = FOF_NOCONFIRMATION | FOF_NOERRORUI | FOF_SILENT |
+                      FOF_ALLOWUNDO | FOFX_RECYCLEONDELETE;
+  if (FAILED(operation->SetOperationFlags(flags)))
+    throw IpcException("IO_ERROR", "Cannot configure the Recycle Bin operation");
+  Microsoft::WRL::ComPtr<IShellItem> item;
+  if (FAILED(SHCreateItemFromParsingName(path.c_str(), nullptr,
+                                         IID_PPV_ARGS(&item))) ||
+      FAILED(operation->DeleteItem(item.Get(), nullptr)) ||
+      FAILED(operation->PerformOperations()))
+    throw IpcException("IO_ERROR", "Move to Recycle Bin failed");
+  BOOL aborted = FALSE;
+  if (FAILED(operation->GetAnyOperationsAborted(&aborted)) || aborted)
+    throw IpcException("IO_ERROR", "Move to Recycle Bin was canceled");
+}
+
 struct PendingIpcResponse {
   std::shared_ptr<IpcDispatcher> dispatcher;
   std::string method;
@@ -225,6 +258,7 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
     services.open_files = [this](const OpenFileDialogOptions& options) {
       return ChooseFiles(window_, options);
     };
+    services.trash_file = MoveFileToRecycleBin;
     services.file_grants = std::move(file_grants);
     ipc_dispatcher_ =
         std::make_shared<IpcDispatcher>(manifest_, std::move(services));

@@ -295,13 +295,8 @@ std::string ResourceServer::Start() {
                                        ? static_cast<std::size_t>(
                                              payload_.manifest.backend_proxy.max_request_size)
                                        : 1024u);
-    server->set_pre_routing_handler(
+    const auto reject_local_file_write =
         [this](const httplib::Request& request, httplib::Response& response) {
-          if (request.path != kLocalFilePrefix &&
-              request.path.rfind(std::string(kLocalFilePrefix) + "/", 0) != 0)
-            return httplib::Server::HandlerResponse::Unhandled;
-          if (request.method == "GET" || request.method == "HEAD")
-            return httplib::Server::HandlerResponse::Unhandled;
           if (!IsExpectedResourceHost(request.get_header_value("Host"),
                                       static_cast<std::uint16_t>(port_))) {
             response.status = 403;
@@ -310,6 +305,16 @@ std::string ResourceServer::Start() {
             response.set_header("Allow", "GET, HEAD");
             SetLocalFileHeaders(response);
           }
+        };
+    server->set_pre_routing_handler(
+        [reject_local_file_write](const httplib::Request& request,
+                                  httplib::Response& response) {
+          if (request.path != kLocalFilePrefix &&
+              request.path.rfind(std::string(kLocalFilePrefix) + "/", 0) != 0)
+            return httplib::Server::HandlerResponse::Unhandled;
+          if (request.method == "GET" || request.method == "HEAD")
+            return httplib::Server::HandlerResponse::Unhandled;
+          reject_local_file_write(request, response);
           return httplib::Server::HandlerResponse::Handled;
         });
     if (backend_proxy_) {
@@ -345,6 +350,16 @@ std::string ResourceServer::Start() {
                                   static_cast<std::uint16_t>(port_),
                                   file_grants_, logger_);
                 });
+    // cpp-httplib 0.51 only runs pre-routing after finding a matching route.
+    // Register every ordinary write verb so the bridge reliably returns 405
+    // instead of the library's default 404, while the pre-routing handler still
+    // rejects the request before any route-specific processing.
+    const std::string local_file_pattern = "^/__lw_file__(?:/.*)?$";
+    server->Post(local_file_pattern, reject_local_file_write);
+    server->Put(local_file_pattern, reject_local_file_write);
+    server->Patch(local_file_pattern, reject_local_file_write);
+    server->Delete(local_file_pattern, reject_local_file_write);
+    server->Options(local_file_pattern, reject_local_file_write);
     server->Get("/.*", [this](const httplib::Request& request, httplib::Response& response) {
       if (logger_ && logger_->DebugEnabled()) logger_->Debug("GET " + request.path);
       const auto host = request.get_header_value("Host");
