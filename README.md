@@ -296,7 +296,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
 - `--ipc`：为本地打包模式启用 Native IPC；在线 URL 模式禁止启用。
-- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`fs.list`、`fs.move`、`fs.delete`。
+- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`fs.exists`、`fs.list`、`fs.copy`、`fs.move`、`fs.delete`。
 - `--ipc-root`：重复传入文件系统固定根目录；支持 `${HOME}`、`${DESKTOP}`、`${DOCUMENTS}`、`${PICTURES}`、`${DOWNLOADS}`、`${APP_DATA}`、`${APP_CACHE}`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
@@ -328,7 +328,9 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --title "Native IPC 示例" --windowed --ipc `
   --ipc-capability app.info `
   --ipc-capability dialog.directory `
+  --ipc-capability fs.exists `
   --ipc-capability fs.list `
+  --ipc-capability fs.copy `
   --ipc-capability fs.move `
   --ipc-capability fs.delete
 ```
@@ -344,6 +346,22 @@ await lw.invoke("fs.move", {
   overwrite: false
 });
 await lw.invoke("fs.delete", { path: selected.path + "/after.txt" });
+```
+
+也可以检查路径并复制普通文件。复制默认禁止覆盖，只有显式传入
+`overwrite: true` 才会替换已有目标；第一版不递归复制目录：
+
+```js
+const state = await lw.invoke("fs.exists", {
+  path: selected.path + "/photo.jpg"
+});
+if (state.exists) {
+  await lw.invoke("fs.copy", {
+    from: selected.path + "/photo.jpg",
+    to: selected.path + "/photo-backup.jpg",
+    overwrite: false
+  });
+}
 ```
 
 协议版本为 `lw-ipc-v1`，请求和响应使用 JSON。消息最大 1 MiB，ID/方法名最大 128 字节，同一页面最多保留 64 个待处理请求，重复 ID 返回 `BUSY`。错误码稳定为 `INVALID_REQUEST`、`INVALID_ARGUMENT`、`METHOD_NOT_FOUND`、`PERMISSION_DENIED`、`USER_CANCELLED`、`NOT_FOUND`、`ALREADY_EXISTS`、`IO_ERROR`、`UNSUPPORTED`、`BUSY` 和 `INTERNAL_ERROR`。

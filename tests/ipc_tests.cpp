@@ -69,13 +69,13 @@ void RunIpcTests() {
   manifest.app_id = "test.ipc.app";
   manifest.title = "IPC Test";
   manifest.ipc.enabled = true;
-  manifest.ipc.capabilities = {"app.info", "dialog.directory", "fs.list",
-                               "fs.move", "fs.delete"};
+  manifest.ipc.capabilities = {"app.info", "dialog.directory", "fs.exists",
+                               "fs.list", "fs.copy", "fs.move", "fs.delete"};
   manifest.ipc.filesystem_roots = {root.u8string()};
   lwweb::ValidateManifest(manifest);
   const auto round_trip =
       lwweb::ParseManifest(lwweb::SerializeManifest(manifest));
-  Check(round_trip.ipc.enabled && round_trip.ipc.capabilities.size() == 5 &&
+  Check(round_trip.ipc.enabled && round_trip.ipc.capabilities.size() == 7 &&
             round_trip.ipc.filesystem_roots.size() == 1,
         "IPC manifest configuration round-trips");
 

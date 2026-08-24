@@ -15,6 +15,7 @@
   <h1>Native IPC 权限示例</h1>
   <p class="note">先通过系统窗口选择目录；授权仅在本次应用运行期间有效。</p>
   <button id="select">选择并授权目录</button>
+  <button id="exists" disabled>检查目录</button>
   <button id="list" disabled>列出目录</button>
   <pre id="output">正在读取应用信息…</pre>
   <script>
@@ -28,8 +29,12 @@
     invoke('app.getInfo').then(show);
     document.querySelector('#select').onclick=async()=>{
       const result=await invoke('dialog.selectDirectory');
-      directory=result.path;document.querySelector('#list').disabled=false;show(result);
+      directory=result.path;
+      document.querySelector('#exists').disabled=false;
+      document.querySelector('#list').disabled=false;
+      show(result);
     };
+    document.querySelector('#exists').onclick=()=>invoke('fs.exists',{path:directory}).then(show);
     document.querySelector('#list').onclick=()=>invoke('fs.list',{path:directory}).then(show);
   </script>
 </body>

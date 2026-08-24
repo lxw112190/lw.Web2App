@@ -1,7 +1,7 @@
 #pragma once
 
+#include "lwweb/ipc/filesystem_access.h"
 #include "lwweb/ipc/ipc_message.h"
-#include "lwweb/ipc/ipc_permissions.h"
 #include "lwweb/packer/manifest.h"
 
 #include <filesystem>
@@ -41,7 +41,7 @@ class IpcDispatcher {
 
   Manifest manifest_;
   IpcRuntimeServices services_;
-  std::shared_ptr<IpcFilesystemPermissions> filesystem_;
+  std::shared_ptr<IpcFilesystemAccess> filesystem_;
   mutable std::mutex pending_mutex_;
   std::set<std::string> pending_ids_;
 };

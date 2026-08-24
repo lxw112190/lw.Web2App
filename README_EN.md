@@ -289,7 +289,7 @@ Additional options:
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
 - `--ipc`: enable Native IPC for a local package; URL mode cannot enable it.
-- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `fs.list`, `fs.move`, or `fs.delete`.
+- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, or `fs.delete`.
 - `--ipc-root`: repeat for each fixed filesystem root; `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`, `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}` are supported.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
@@ -321,12 +321,14 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --title "Native IPC Example" --windowed --ipc `
   --ipc-capability app.info `
   --ipc-capability dialog.directory `
+  --ipc-capability fs.exists `
   --ipc-capability fs.list `
+  --ipc-capability fs.copy `
   --ipc-capability fs.move `
   --ipc-capability fs.delete
 ```
 
-The example first invokes `dialog.selectDirectory`. A directory selected through the system dialog becomes a session-only grant and is forgotten when the app exits. The page may then invoke `fs.list`, `fs.move`, and `fs.delete` within that grant. Fixed roots can instead be embedded with repeatable `--ipc-root` options.
+The example first invokes `dialog.selectDirectory`. A directory selected through the system dialog becomes a session-only grant and is forgotten when the app exits. The page may then invoke `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, and `fs.delete` within that grant. `fs.copy` handles regular files, refuses replacement by default, and replaces an existing target only with `overwrite: true`; recursive directory copies are intentionally unsupported in the first version. Fixed roots can instead be embedded with repeatable `--ipc-root` options.
 
 The JSON protocol is `lw-ipc-v1`. Messages are capped at 1 MiB, IDs and method names at 128 bytes, and each page may have at most 64 pending requests; duplicate IDs return `BUSY`. Stable error codes are `INVALID_REQUEST`, `INVALID_ARGUMENT`, `METHOD_NOT_FOUND`, `PERMISSION_DENIED`, `USER_CANCELLED`, `NOT_FOUND`, `ALREADY_EXISTS`, `IO_ERROR`, `UNSUPPORTED`, `BUSY`, and `INTERNAL_ERROR`.
 

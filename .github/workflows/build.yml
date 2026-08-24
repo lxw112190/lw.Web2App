@@ -110,7 +110,9 @@ jobs:
             --windowed --ipc `
             --ipc-capability app.info `
             --ipc-capability dialog.directory `
+            --ipc-capability fs.exists `
             --ipc-capability fs.list `
+            --ipc-capability fs.copy `
             --ipc-capability fs.move `
             --ipc-capability fs.delete
           if ($LASTEXITCODE -ne 0 -or -not (Test-Path $output)) {
@@ -246,7 +248,9 @@ jobs:
             --title "Native IPC 示例" --windowed --ipc \
             --ipc-capability app.info \
             --ipc-capability dialog.directory \
+            --ipc-capability fs.exists \
             --ipc-capability fs.list \
+            --ipc-capability fs.copy \
             --ipc-capability fs.move \
             --ipc-capability fs.delete
           ./build/lw.Web2App inspect dist/lw.Web2App/examples/native-ipc \

@@ -51,7 +51,8 @@ void ValidateManifest(const Manifest& manifest) {
       (!manifest.ipc.capabilities.empty() || !manifest.ipc.filesystem_roots.empty()))
     throw Error("Native IPC capabilities require ipc.enabled=true");
   static const std::set<std::string> supported_capabilities = {
-      "app.info", "dialog.directory", "fs.list", "fs.move", "fs.delete"};
+      "app.info", "dialog.directory", "fs.exists", "fs.list", "fs.copy",
+      "fs.move", "fs.delete"};
   std::set<std::string> unique_capabilities;
   for (const auto& capability : manifest.ipc.capabilities) {
     if (!supported_capabilities.count(capability))

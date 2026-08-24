@@ -1,55 +1,19 @@
 #include "lwweb/ipc/ipc_dispatcher.h"
 
-#include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 
-#include <algorithm>
 #include <filesystem>
 
-#ifdef _WIN32
-#include <Windows.h>
-#endif
-
 namespace lwweb {
-namespace {
-
-std::string RequiredString(const nlohmann::json& params, const char* name) {
-  const auto found = params.find(name);
-  if (found == params.end() || !found->is_string() || found->get_ref<const std::string&>().empty())
-    throw IpcException("INVALID_ARGUMENT", std::string(name) + " must be a non-empty string");
-  return found->get<std::string>();
-}
-
-std::string PathText(const std::filesystem::path& path) { return path.u8string(); }
-
-bool OptionalBool(const nlohmann::json& params, const char* name,
-                  bool fallback = false) {
-  const auto found = params.find(name);
-  if (found == params.end()) return fallback;
-  if (!found->is_boolean())
-    throw IpcException("INVALID_ARGUMENT", std::string(name) + " must be a boolean");
-  return found->get<bool>();
-}
-
-IpcException FilesystemError(const std::error_code& error, const char* operation) {
-  if (error == std::errc::no_such_file_or_directory)
-    return IpcException("NOT_FOUND", std::string(operation) + " failed: path not found");
-  if (error == std::errc::file_exists)
-    return IpcException("ALREADY_EXISTS", std::string(operation) + " failed: target exists");
-  if (error == std::errc::permission_denied)
-    return IpcException("PERMISSION_DENIED", std::string(operation) + " was denied");
-  return IpcException("IO_ERROR", std::string(operation) + " failed");
-}
-
-}  // namespace
 
 IpcDispatcher::IpcDispatcher(Manifest manifest, IpcRuntimeServices services)
     : manifest_(std::move(manifest)), services_(std::move(services)) {
   if (manifest_.ipc.enabled) {
     if (manifest_.mode != AppMode::Local)
       throw IpcException("PERMISSION_DENIED", "Native IPC is disabled in URL mode");
-    filesystem_ = std::make_shared<IpcFilesystemPermissions>(
+    auto permissions = std::make_shared<IpcFilesystemPermissions>(
         manifest_.ipc.filesystem_roots, EffectiveAppId(manifest_));
+    filesystem_ = std::make_shared<IpcFilesystemAccess>(std::move(permissions));
   }
 }
 
@@ -109,77 +73,28 @@ nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
       throw IpcException("UNSUPPORTED", "Directory dialog is unavailable");
     const auto selected = services_.select_directory();
     if (!selected) throw IpcException("USER_CANCELLED", "Directory selection was canceled");
-    filesystem_->AddSessionGrant(*selected);
-    return {{"path", PathText(*selected)}};
+    filesystem_->GrantDirectory(*selected);
+    return {{"path", selected->u8string()}};
+  }
+  if (request.method == "fs.exists") {
+    RequireCapability("fs.exists");
+    return filesystem_->Exists(request.params);
   }
   if (request.method == "fs.list") {
     RequireCapability("fs.list");
-    const auto path = filesystem_->RequireExisting(RequiredString(request.params, "path"));
-    std::error_code error;
-    if (!std::filesystem::is_directory(path, error))
-      throw IpcException("INVALID_ARGUMENT", "fs.list path must be a directory");
-    nlohmann::json entries = nlohmann::json::array();
-    std::size_t count = 0;
-    for (std::filesystem::directory_iterator iterator(path, error), end;
-         !error && iterator != end; iterator.increment(error)) {
-      if (++count > 10000)
-        throw IpcException("IO_ERROR", "Directory entry count exceeds the safety limit");
-      const auto& item = *iterator;
-      const auto status = item.symlink_status(error);
-      if (error) break;
-      nlohmann::json entry = {{"name", item.path().filename().u8string()},
-                              {"path", item.path().u8string()},
-                              {"type", std::filesystem::is_symlink(status)
-                                           ? "symlink"
-                                           : std::filesystem::is_directory(status) ? "directory"
-                                                                                   : "file"}};
-      if (std::filesystem::is_regular_file(status)) {
-        const auto size = item.file_size(error);
-        if (!error) entry["size"] = size;
-      }
-      entries.push_back(std::move(entry));
-    }
-    if (error) throw FilesystemError(error, "Directory listing");
-    return {{"entries", std::move(entries)}};
+    return filesystem_->List(request.params);
+  }
+  if (request.method == "fs.copy") {
+    RequireCapability("fs.copy");
+    return filesystem_->Copy(request.params);
   }
   if (request.method == "fs.move") {
     RequireCapability("fs.move");
-    const auto source = filesystem_->RequireExisting(RequiredString(request.params, "from"));
-    const auto destination =
-        filesystem_->RequireDestination(RequiredString(request.params, "to"));
-    const bool overwrite = OptionalBool(request.params, "overwrite");
-    std::error_code comparison_error;
-    if (std::filesystem::equivalent(source, destination, comparison_error) &&
-        !comparison_error)
-      throw IpcException("INVALID_ARGUMENT", "Move source and destination must differ");
-    std::error_code error;
-    if (std::filesystem::exists(destination, error)) {
-      if (!overwrite) throw IpcException("ALREADY_EXISTS", "Move destination already exists");
-    }
-#ifdef _WIN32
-    const DWORD flags = MOVEFILE_WRITE_THROUGH |
-                        (overwrite ? MOVEFILE_REPLACE_EXISTING : 0);
-    if (!MoveFileExW(source.c_str(), destination.c_str(), flags)) {
-      error = std::error_code(static_cast<int>(GetLastError()),
-                              std::system_category());
-    }
-#else
-    std::filesystem::rename(source, destination, error);
-#endif
-    if (error) throw FilesystemError(error, "Move");
-    return {{"path", PathText(destination)}};
+    return filesystem_->Move(request.params);
   }
   if (request.method == "fs.delete") {
     RequireCapability("fs.delete");
-    const auto path = filesystem_->RequireExisting(RequiredString(request.params, "path"));
-    const bool recursive = OptionalBool(request.params, "recursive");
-    std::error_code error;
-    if (recursive)
-      (void)std::filesystem::remove_all(path, error);
-    else if (!std::filesystem::remove(path, error) && !error)
-      throw IpcException("IO_ERROR", "Directory is not empty");
-    if (error) throw FilesystemError(error, "Delete");
-    return nlohmann::json::object();
+    return filesystem_->Delete(request.params);
   }
   throw IpcException("METHOD_NOT_FOUND", "Native method is not available");
 }
