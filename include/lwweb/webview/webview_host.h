@@ -15,6 +15,7 @@ namespace lwweb {
 
 class Logger;
 class IpcDispatcher;
+class LocalFileGrantManager;
 
 constexpr UINT kWebViewIpcResponseMessage = WM_APP + 0x4a1;
 
@@ -31,7 +32,8 @@ class WebViewHost {
               const Manifest& manifest,
               std::function<void(const std::wstring&)> on_error,
               std::function<void(bool)> on_fullscreen_changed,
-              const Logger* logger = nullptr);
+              const Logger* logger = nullptr,
+              std::shared_ptr<LocalFileGrantManager> file_grants = nullptr);
   void Resize();
   bool HandleWindowMessage(UINT message, WPARAM wparam, LPARAM lparam);
 

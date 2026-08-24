@@ -1,10 +1,79 @@
 #include "lwweb/ipc/ipc_dispatcher.h"
 
 #include "lwweb/common/logging.h"
+#include "lwweb/runtime/local_file_grant.h"
 
+#include <algorithm>
+#include <cctype>
 #include <filesystem>
 
 namespace lwweb {
+namespace {
+
+OpenFileDialogOptions ParseOpenFileOptions(const nlohmann::json& params) {
+  OpenFileDialogOptions options;
+  if (const auto multiple = params.find("multiple"); multiple != params.end()) {
+    if (!multiple->is_boolean())
+      throw IpcException("INVALID_ARGUMENT", "multiple must be a boolean");
+    options.multiple = multiple->get<bool>();
+  }
+  const auto filters = params.find("filters");
+  if (filters == params.end()) return options;
+  if (!filters->is_array() || filters->size() > 16)
+    throw IpcException("INVALID_ARGUMENT", "filters must contain at most 16 entries");
+  for (const auto& value : *filters) {
+    if (!value.is_object())
+      throw IpcException("INVALID_ARGUMENT", "Each file filter must be an object");
+    const auto name = value.find("name");
+    const auto extensions = value.find("extensions");
+    if (name == value.end() || !name->is_string() || name->get_ref<const std::string&>().empty() ||
+        name->get_ref<const std::string&>().size() > 128 ||
+        name->get_ref<const std::string&>().find('\0') != std::string::npos ||
+        extensions == value.end() ||
+        !extensions->is_array() || extensions->empty() || extensions->size() > 32)
+      throw IpcException("INVALID_ARGUMENT", "File filter name or extensions are invalid");
+    OpenFileFilter filter;
+    filter.name = name->get<std::string>();
+    if (std::any_of(filter.name.begin(), filter.name.end(), [](unsigned char character) {
+          return character < 0x20 || character == 0x7f;
+        }))
+      throw IpcException("INVALID_ARGUMENT", "File filter name is invalid");
+    for (const auto& extension_value : *extensions) {
+      if (!extension_value.is_string())
+        throw IpcException("INVALID_ARGUMENT", "File extension must be a string");
+      auto extension = extension_value.get<std::string>();
+      if (!extension.empty() && extension.front() == '.') extension.erase(extension.begin());
+      if (extension.empty() || extension.size() > 32 ||
+          (extension != "*" &&
+           !std::all_of(extension.begin(), extension.end(), [](unsigned char character) {
+             return std::isalnum(character) || character == '.' || character == '_' ||
+                    character == '-';
+           })))
+        throw IpcException("INVALID_ARGUMENT", "File extension is invalid");
+      filter.extensions.push_back(std::move(extension));
+    }
+    options.filters.push_back(std::move(filter));
+  }
+  return options;
+}
+
+nlohmann::json PublicGrant(const LocalFileGrant& grant) {
+  return {{"id", grant.id},
+          {"name", grant.name},
+          {"size", grant.size},
+          {"mime", grant.mime},
+          {"url", grant.url}};
+}
+
+bool IsValidGrantId(const std::string& id) {
+  return id.size() == 32 &&
+         std::all_of(id.begin(), id.end(), [](unsigned char character) {
+           return std::isdigit(character) ||
+                  (character >= 'a' && character <= 'f');
+         });
+}
+
+}  // namespace
 
 IpcDispatcher::IpcDispatcher(Manifest manifest, IpcRuntimeServices services)
     : manifest_(std::move(manifest)), services_(std::move(services)) {
@@ -23,7 +92,8 @@ void IpcDispatcher::RequireCapability(const std::string& capability) const {
 }
 
 IpcExecution IpcDispatcher::ExecutionFor(const std::string& method) const {
-  if (method == "dialog.selectDirectory") return IpcExecution::UiThread;
+  if (method == "dialog.selectDirectory" || method == "dialog.openFile")
+    return IpcExecution::UiThread;
   if (method.rfind("fs.", 0) == 0) return IpcExecution::Worker;
   return IpcExecution::Immediate;
 }
@@ -75,6 +145,39 @@ nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
     if (!selected) throw IpcException("USER_CANCELLED", "Directory selection was canceled");
     filesystem_->GrantDirectory(*selected);
     return {{"path", selected->u8string()}};
+  }
+  if (request.method == "dialog.openFile") {
+    RequireCapability("dialog.file");
+    if (!services_.open_files || !services_.file_grants)
+      throw IpcException("UNSUPPORTED", "System file dialog is unavailable");
+    const auto options = ParseOpenFileOptions(request.params);
+    const auto selected = services_.open_files(options);
+    if (!selected) throw IpcException("USER_CANCELLED", "File selection was canceled");
+    if (selected->empty() || selected->size() > 256)
+      throw IpcException("INVALID_ARGUMENT", "Selected file count is invalid");
+    nlohmann::json files = nlohmann::json::array();
+    std::vector<std::string> created;
+    try {
+      for (const auto& path : *selected) {
+        auto grant = services_.file_grants->Create(path);
+        created.push_back(grant.id);
+        files.push_back(PublicGrant(grant));
+      }
+    } catch (const std::exception&) {
+      for (const auto& id : created) services_.file_grants->Revoke(id);
+      throw IpcException("IO_ERROR", "Selected file cannot be granted");
+    }
+    return {{"files", std::move(files)}};
+  }
+  if (request.method == "file.revoke") {
+    RequireCapability("dialog.file");
+    if (!services_.file_grants)
+      throw IpcException("UNSUPPORTED", "Local file grants are unavailable");
+    const auto id = request.params.find("id");
+    if (id == request.params.end() || !id->is_string() ||
+        !IsValidGrantId(id->get_ref<const std::string&>()))
+      throw IpcException("INVALID_ARGUMENT", "File grant ID is invalid");
+    return {{"revoked", services_.file_grants->Revoke(id->get<std::string>())}};
   }
   if (request.method == "fs.exists") {
     RequireCapability("fs.exists");

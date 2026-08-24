@@ -114,6 +114,7 @@ jobs:
             --windowed --ipc `
             --ipc-capability app.info `
             --ipc-capability dialog.directory `
+            --ipc-capability dialog.file `
             --ipc-capability fs.exists `
             --ipc-capability fs.list `
             --ipc-capability fs.copy `
@@ -127,6 +128,24 @@ jobs:
           if ($inspect.ExitCode -ne 0) {
             throw "Native IPC example inspection failed"
           }
+
+      - name: Launch generated Windows Runtime and verify Native IPC
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          .github/scripts/windows-runtime-e2e.ps1 `
+            -Packer (Resolve-Path 'build/Release/lw.Web2App.exe').Path `
+            -Source (Resolve-Path 'tests/fixtures/runtime-e2e').Path `
+            -WorkDirectory (Join-Path $PWD 'build/runtime-e2e')
+
+      - name: Upload Windows Runtime E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-runtime-e2e-diagnostics
+          path: build/runtime-e2e/runtime.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Smoke test project publish
         shell: pwsh
@@ -416,6 +435,7 @@ jobs:
             --title "Native IPC 示例" --windowed --ipc \
             --ipc-capability app.info \
             --ipc-capability dialog.directory \
+            --ipc-capability dialog.file \
             --ipc-capability fs.exists \
             --ipc-capability fs.list \
             --ipc-capability fs.copy \

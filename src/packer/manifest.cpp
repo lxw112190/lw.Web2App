@@ -42,6 +42,11 @@ void ValidateManifest(const Manifest& manifest) {
   if (manifest.mode == AppMode::Local) {
     if (!NormalizeArchivePath(manifest.entry)) throw Error("Unsafe manifest entry path");
     if (!IsSafeStartPath(manifest.start_path)) throw Error("Unsafe manifest start path");
+    if (manifest.entry == "__lw_file__" ||
+        manifest.entry.rfind("__lw_file__/", 0) == 0 ||
+        manifest.start_path == "/__lw_file__" ||
+        manifest.start_path.rfind("/__lw_file__/", 0) == 0)
+      throw Error("Manifest path conflicts with the local file bridge prefix");
   } else if (!IsSupportedHttpUrl(manifest.url)) {
     throw Error("URL mode requires an http:// or https:// URL");
   }
@@ -51,7 +56,7 @@ void ValidateManifest(const Manifest& manifest) {
       (!manifest.ipc.capabilities.empty() || !manifest.ipc.filesystem_roots.empty()))
     throw Error("Native IPC capabilities require ipc.enabled=true");
   static const std::set<std::string> supported_capabilities = {
-      "app.info", "dialog.directory", "fs.exists", "fs.list", "fs.copy",
+      "app.info", "dialog.directory", "dialog.file", "fs.exists", "fs.list", "fs.copy",
       "fs.move", "fs.delete"};
   std::set<std::string> unique_capabilities;
   for (const auto& capability : manifest.ipc.capabilities) {
@@ -77,6 +82,9 @@ void ValidateManifest(const Manifest& manifest) {
         proxy.prefix.front() != '/' || proxy.prefix.back() == '/' ||
         !IsCanonicalArchivePath(proxy.prefix.substr(1)))
       throw Error("Backend proxy prefix is unsafe");
+    if (proxy.prefix == "/__lw_file__" ||
+        proxy.prefix.rfind("/__lw_file__/", 0) == 0)
+      throw Error("Backend proxy conflicts with the local file bridge prefix");
     if (manifest.start_path == proxy.prefix ||
         manifest.start_path.rfind(proxy.prefix + "/", 0) == 0)
       throw Error("Start path conflicts with the backend proxy prefix");

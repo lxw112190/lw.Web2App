@@ -40,7 +40,7 @@ Linux graphical packager (Ubuntu 22.04):
 - The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
 - True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
 - An optional controlled backend proxy forwards same-origin `/__lw_proxy__/...` requests to one fixed legacy HTTP origin from the Manifest, without disabling WebView security; Windows and Linux share the same implementation.
-- Optional Native IPC exposes app information, a system directory picker, and permission-scoped filesystem operations to trusted local pages through the stable `window.lw.invoke()` API; it is disabled by default and authorized per method.
+- Optional Native IPC exposes app information, system directory/file pickers, and permission-scoped filesystem operations to trusted local pages through the stable `window.lw.invoke()` API. A session Local File Bridge streams large local files over localhost HTTP. Both are disabled by default and authorized per method.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
 - Limits for entry count, individual file size, and total uncompressed size.
 - PNG/ICO application icons and complete Windows PE version metadata.
@@ -175,7 +175,7 @@ Linux artifacts include a lw.Web2App `.deb`, a portable `.tar.gz`, the generated
 
 [wechat-article-formatter](https://github.com/lxw112190/wechat-article-formatter) is a Vite, React, and TypeScript Markdown editor for WeChat Official Account articles, with themes, mobile preview, and rich-text copying. CI checks out its `main` branch, runs `npm ci` and `npm run build`, and packages the resulting `dist` directory with the freshly built lw.Web2App. It then runs `inspect` against `examples/wechat-article-formatter.exe` to reload the manifest and verify the payload SHA-256. Any failure stops the workflow.
 
-This example exercises a real Vite/React build, a Chinese title, a non-trivial asset set, SPA fallback, Windows PE metadata, Linux ELF permissions, and final distribution packaging. Linux CI also launches the generated app under Xvfb and checks WebKitGTK initialization and navigation logs.
+This example exercises a real Vite/React build, a Chinese title, a non-trivial asset set, SPA fallback, Windows PE metadata, Linux ELF permissions, and final distribution packaging. Windows CI also launches a generated app, invokes `app.getInfo` from its WebView2 page, and verifies WebView2 initialization, navigation, and the Native IPC round trip in the Runtime log. Linux CI launches the generated app under Xvfb and checks WebKitGTK initialization and navigation logs.
 
 ## Build from Source
 
@@ -382,7 +382,7 @@ Additional options:
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
 - `--ipc`: enable Native IPC for a local package; URL mode cannot enable it.
-- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, or `fs.delete`.
+- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `dialog.file`, `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, or `fs.delete`.
 - `--ipc-root`: repeat for each fixed filesystem root; `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`, `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}` are supported.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
@@ -431,6 +431,7 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --title "Native IPC Example" --windowed --ipc `
   --ipc-capability app.info `
   --ipc-capability dialog.directory `
+  --ipc-capability dialog.file `
   --ipc-capability fs.exists `
   --ipc-capability fs.list `
   --ipc-capability fs.copy `
@@ -438,7 +439,44 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.delete
 ```
 
-The example first invokes `dialog.selectDirectory`. A directory selected through the system dialog becomes a session-only grant and is forgotten when the app exits. The page may then invoke `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, and `fs.delete` within that grant. `fs.copy` handles regular files, refuses replacement by default, and replaces an existing target only with `overwrite: true`; recursive directory copies are intentionally unsupported in the first version. Fixed roots can instead be embedded with repeatable `--ipc-root` options.
+The example invokes both `dialog.selectDirectory` and `dialog.openFile`. A directory selected through the system dialog becomes a session-only filesystem grant and is forgotten when the app exits. The page may then invoke `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, and `fs.delete` within that grant. `fs.copy` handles regular files, refuses replacement by default, and replaces an existing target only with `overwrite: true`; recursive directory copies are intentionally unsupported in the first version. Fixed roots can instead be embedded with repeatable `--ipc-root` options.
+
+### Controlled Local File Bridge
+
+Large PDFs, videos, images, and audio files must not cross JSON IPC as Base64. The
+`dialog.file` capability enables `dialog.openFile`: Native IPC opens the system picker
+and creates a random process-local grant, while the same-origin localhost HTTP data
+plane streams the bytes:
+
+```js
+const result = await lw.invoke("dialog.openFile", {
+  multiple: false,
+  filters: [{ name: "PDF documents", extensions: ["pdf"] }]
+});
+
+const file = result.files[0];
+// { id, name, size, mime, url: "/__lw_file__/<opaque-id>/document.pdf" }
+const loadingTask = pdfjsLib.getDocument({ url: file.url });
+```
+
+Single and multiple selection always return `files[]`. Windows uses `IFileOpenDialog`
+and Linux uses GTK File Chooser. Up to 16 filter groups and 32 safe extensions per
+group are accepted; `"*"` means all files. The web page never receives the actual disk
+path, and the display filename in the URL is never used to locate a file. Only a
+canonical regular file selected by the native dialog can receive an unpredictable
+grant ID of at least 128 bits. Windows device namespaces and UNC paths are rejected.
+
+`/__lw_file__/` accepts only `GET` and `HEAD` and supports one fixed, open-ended, or
+suffix byte range. It returns the appropriate `200`, `206`, `404`, `405`, or `416`
+status together with `Accept-Ranges`, accurate `Content-Length`/`Content-Range`,
+`X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`. A 64 KiB
+streaming buffer keeps memory use independent of file size; multipart ranges return
+`416` in the first version. Grants disappear when the Runtime exits and may be revoked
+early with `await lw.invoke("file.revoke", { id: file.id })`.
+
+The `fs.*` methods remain the control plane for file management. The Local File Bridge
+is a read-only data plane and is unavailable in URL mode. INFO logs never include the
+path, filename, or complete grant token.
 
 The JSON protocol is `lw-ipc-v1`. Messages are capped at 1 MiB, IDs and method names at 128 bytes, and each page may have at most 64 pending requests; duplicate IDs return `BUSY`. Stable error codes are `INVALID_REQUEST`, `INVALID_ARGUMENT`, `METHOD_NOT_FOUND`, `PERMISSION_DENIED`, `USER_CANCELLED`, `NOT_FOUND`, `ALREADY_EXISTS`, `IO_ERROR`, `UNSUPPORTED`, `BUSY`, and `INTERNAL_ERROR`.
 
@@ -491,7 +529,7 @@ This project packages trusted static web applications. It is not a sandbox for h
 - Maximum manifest size: 1 MiB.
 - The HTTP service listens only on IPv4 loopback and requires the exact per-app port Host value.
 - The backend proxy accepts only the fixed Manifest `http://` origin; arbitrary URLs, cross-site callers, cross-host redirects, and ZIP resources that collide with its prefix are rejected, with explicit size and timeout limits.
-- Native IPC is disabled by default and local-mode only; capabilities, exact origin, fixed roots, and session grants are enforced natively.
+- Native IPC is disabled by default and local-mode only; capabilities, exact origin, fixed roots, directory grants, and session FileGrants are enforced natively. The Local File Bridge never accepts a web-supplied disk path and streams only by opaque token.
 - SHA-256 detects corruption or modification but does not authenticate a publisher. Use the Windows CLI Authenticode options when publisher identity is required, and protect the code-signing private key appropriately.
 
 ## Project Layout
@@ -517,13 +555,14 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 1. Builds and tests Windows x64 with VS2022 on Windows 2022.
 2. Builds and tests Linux x64 with Ninja, GTK3, WebKitGTK 4.1, and OpenSSL on Ubuntu 22.04 and 24.04.
 3. Builds the `wechat-article-formatter` Vite bundle in all platform jobs.
-4. Generates a Windows EXE or Linux ELF and validates its payload with `inspect`.
+4. Generates a Windows EXE or Linux ELF, validates its payload with `inspect`, and tests complete, HEAD, single-range, invalid-token, traversal, read-only-method, and revoke behavior for the Local File Bridge.
 5. Runs `publish` smoke tests on Windows and Ubuntu and validates the ZIP/tar.gz, `SHA256SUMS.txt`, and `RELEASE_INFO.json`.
 6. Builds an Installer with real Inno Setup on Windows CI and verifies Authenticode on both the Portable EXE and Setup EXE.
 7. Builds a real generated-app DEB on Ubuntu and checks its dependencies, ELF, desktop entry, and icon with `dpkg-deb --info/--contents`.
-8. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
-9. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
-10. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
+8. Launches a generated Windows EXE, invokes `app.getInfo` from its WebView2 page, validates initialization, navigation, IPC request/response markers in the Runtime log, and uploads diagnostics on failure.
+9. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
+10. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
+11. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
 
 ## Dependencies
 

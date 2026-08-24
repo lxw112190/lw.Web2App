@@ -148,6 +148,14 @@ ZipBuildResult BuildZip(const PackOptions& options) {
         std::filesystem::relative(item.path(), source).generic_u8string();
     const auto normalized = NormalizeArchivePath(relative);
     if (!normalized) throw Error("Source contains an unsafe relative path");
+    if (*normalized == "__lw_file__" ||
+        normalized->rfind("__lw_file__/", 0) == 0)
+      throw Error("Source resource conflicts with the local file bridge prefix");
+    if (options.manifest.backend_proxy.enabled) {
+      const auto proxy = options.manifest.backend_proxy.prefix.substr(1);
+      if (*normalized == proxy || normalized->rfind(proxy + "/", 0) == 0)
+        throw Error("Source resource conflicts with the backend proxy prefix");
+    }
     std::ifstream source_file(item.path(), std::ios::binary);
     if (!source_file) throw Error("Cannot open source file: " + *normalized);
     const auto read = [](void* opaque, mz_uint64 offset, void* buffer,

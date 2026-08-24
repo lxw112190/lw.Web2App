@@ -8,6 +8,7 @@
 #include "lwweb/packer/packer.h"
 #include "lwweb/packer/payload.h"
 #include "lwweb/pe/pe_resources.h"
+#include "lwweb/runtime/local_file_grant.h"
 #include "lwweb/runtime/resource_server.h"
 #include "lwweb/runtime/single_instance.h"
 #include "lwweb/webview/webview_host.h"
@@ -30,6 +31,7 @@ namespace {
 struct RuntimeState {
   Logger logger;
   std::unique_ptr<SingleInstanceGuard> instance_guard;
+  std::shared_ptr<LocalFileGrantManager> file_grants;
   std::unique_ptr<ResourceServer> server;
   std::unique_ptr<WebViewHost> webview;
   bool fullscreen = false;
@@ -126,8 +128,10 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   state->instance_guard =
       std::make_unique<SingleInstanceGuard>(EffectiveAppId(payload.manifest));
   if (payload.manifest.mode == AppMode::Local) {
+    state->file_grants = std::make_shared<LocalFileGrantManager>(&state->logger);
     state->server = std::make_unique<ResourceServer>(payload, SecurityLimits{},
-                                                     &state->logger);
+                                                     &state->logger,
+                                                     state->file_grants);
     auto base = state->server->Start();
     local_origin = base;
     while (!local_origin.empty() && local_origin.back() == '/') local_origin.pop_back();
@@ -169,7 +173,7 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
           DestroyWindow(window);
         },
         [window, state](bool fullscreen) { SetFullscreen(window, *state, fullscreen); },
-        &state->logger);
+        &state->logger, state->file_grants);
   } catch (...) {
     SetWindowLongPtrW(window, GWLP_USERDATA, 0);
     DestroyWindow(window);

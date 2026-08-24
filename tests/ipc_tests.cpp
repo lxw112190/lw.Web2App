@@ -2,6 +2,7 @@
 #include "lwweb/ipc/ipc_message.h"
 #include "lwweb/ipc/ipc_permissions.h"
 #include "lwweb/packer/manifest.h"
+#include "lwweb/runtime/local_file_grant.h"
 
 #include <chrono>
 #include <filesystem>
@@ -63,19 +64,21 @@ void RunIpcTests() {
   std::filesystem::create_directories(grant_root);
   {
     std::ofstream(root / "folder" / "before.txt") << "ipc";
+    std::ofstream(grant_root / std::filesystem::u8path(u8"本地文档.pdf"),
+                  std::ios::binary) << "%PDF-local-file-bridge";
   }
 
   lwweb::Manifest manifest;
   manifest.app_id = "test.ipc.app";
   manifest.title = "IPC Test";
   manifest.ipc.enabled = true;
-  manifest.ipc.capabilities = {"app.info", "dialog.directory", "fs.exists",
+  manifest.ipc.capabilities = {"app.info", "dialog.directory", "dialog.file", "fs.exists",
                                "fs.list", "fs.copy", "fs.move", "fs.delete"};
   manifest.ipc.filesystem_roots = {root.u8string()};
   lwweb::ValidateManifest(manifest);
   const auto round_trip =
       lwweb::ParseManifest(lwweb::SerializeManifest(manifest));
-  Check(round_trip.ipc.enabled && round_trip.ipc.capabilities.size() == 7 &&
+  Check(round_trip.ipc.enabled && round_trip.ipc.capabilities.size() == 8 &&
             round_trip.ipc.filesystem_roots.size() == 1,
         "IPC manifest configuration round-trips");
 
@@ -83,6 +86,19 @@ void RunIpcTests() {
   services.platform = "windows";
   services.runtime_version = "0.test";
   services.select_directory = [grant_root] { return std::optional(grant_root); };
+  const auto selected_file = grant_root / std::filesystem::u8path(u8"本地文档.pdf");
+  bool file_options_checked = false;
+  services.open_files = [selected_file, &file_options_checked](
+                            const lwweb::OpenFileDialogOptions& options) {
+    file_options_checked = !options.multiple && options.filters.size() == 2 &&
+                           options.filters[0].name == "PDF" &&
+                           options.filters[0].extensions ==
+                               std::vector<std::string>{"pdf"} &&
+                           options.filters[1].extensions ==
+                               std::vector<std::string>{"*"};
+    return std::optional<std::vector<std::filesystem::path>>({selected_file});
+  };
+  services.file_grants = std::make_shared<lwweb::LocalFileGrantManager>();
   lwweb::IpcDispatcher dispatcher(manifest, services);
   const auto info = dispatcher.Dispatch(request);
   Check(info.ok && info.result["appId"] == "test.ipc.app" &&
@@ -97,6 +113,32 @@ void RunIpcTests() {
   const auto granted_list = dispatcher.Dispatch(
       {"grant-list", "fs.list", {{"path", grant_root.u8string()}}});
   Check(granted_list.ok, "session grant authorizes a selected directory");
+  const auto opened = dispatcher.Dispatch(
+      {"open-file", "dialog.openFile",
+       {{"multiple", false},
+        {"filters", {{{"name", "PDF"}, {"extensions", {".pdf"}}},
+                     {{"name", "All"}, {"extensions", {"*"}}}}}}});
+  Check(opened.ok && file_options_checked && opened.result["files"].size() == 1,
+        "dialog.openFile validates filters and returns a stable files array");
+  const auto public_file = opened.result["files"][0];
+  Check(public_file["name"] == u8"本地文档.pdf" &&
+            public_file["mime"] == "application/pdf" &&
+            public_file["url"].get<std::string>().rfind("/__lw_file__/", 0) == 0 &&
+            public_file.find("path") == public_file.end(),
+        "file dialog response exposes metadata and URL without the local path");
+  const auto grant_id = public_file["id"].get<std::string>();
+  Check(grant_id.size() == 32 && services.file_grants->Find(grant_id).has_value(),
+        "dialog.openFile creates a 128-bit session grant");
+  const auto revoked = dispatcher.Dispatch(
+      {"revoke-file", "file.revoke", {{"id", grant_id}}});
+  Check(revoked.ok && revoked.result["revoked"] == true &&
+            !services.file_grants->Find(grant_id),
+        "file.revoke immediately removes a session grant");
+  const auto invalid_filter = dispatcher.Dispatch(
+      {"invalid-filter", "dialog.openFile",
+       {{"filters", {{{"name", "unsafe"}, {"extensions", {"../pdf"}}}}}}});
+  Check(!invalid_filter.ok && invalid_filter.error.code == "INVALID_ARGUMENT",
+        "dialog.openFile rejects unsafe filter extensions before opening UI");
 
   auto list = dispatcher.Dispatch({"list", "fs.list", {{"path", (root / "folder").u8string()}}});
   Check(list.ok && list.result["entries"].size() == 1,
@@ -162,6 +204,21 @@ void RunIpcTests() {
       {"cancel", "dialog.selectDirectory", {}});
   Check(!canceled.ok && canceled.error.code == "USER_CANCELLED",
         "canceled directory dialog returns stable error");
+  lwweb::IpcRuntimeServices canceled_file_services;
+  canceled_file_services.platform = "windows";
+  canceled_file_services.file_grants =
+      std::make_shared<lwweb::LocalFileGrantManager>();
+  canceled_file_services.open_files = [](const lwweb::OpenFileDialogOptions&) {
+    return std::optional<std::vector<std::filesystem::path>>{};
+  };
+  lwweb::Manifest file_dialog_only = manifest;
+  file_dialog_only.ipc.capabilities = {"dialog.file"};
+  lwweb::IpcDispatcher canceled_file_dispatcher(file_dialog_only,
+                                                 canceled_file_services);
+  const auto canceled_file = canceled_file_dispatcher.Dispatch(
+      {"cancel-file", "dialog.openFile", {}});
+  Check(!canceled_file.ok && canceled_file.error.code == "USER_CANCELLED",
+        "canceled file dialog returns stable error");
 
   lwweb::Manifest url_manifest;
   url_manifest.mode = lwweb::AppMode::Url;

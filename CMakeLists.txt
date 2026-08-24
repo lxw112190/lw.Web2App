@@ -126,6 +126,7 @@ add_library(lwweb_core STATIC
   src/publish/release_info.cpp
   src/runtime/resource_cache.cpp
   src/runtime/backend_proxy.cpp
+  src/runtime/local_file_grant.cpp
   src/runtime/proxy_stream.cpp
   src/runtime/single_instance.cpp
   src/runtime/resource_server.cpp)

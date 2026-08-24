@@ -6,6 +6,7 @@
 #include "lwweb/ipc/ipc_dispatcher.h"
 #include "lwweb/packer/packer.h"
 #include "lwweb/packer/payload.h"
+#include "lwweb/runtime/local_file_grant.h"
 #include "lwweb/runtime/resource_server.h"
 #include "lwweb/runtime/single_instance.h"
 #include "lwweb/version.h"
@@ -194,6 +195,39 @@ std::optional<std::filesystem::path> ChooseIpcDirectory(GtkWidget* owner) {
   return selected;
 }
 
+std::optional<std::vector<std::filesystem::path>> ChooseIpcFiles(
+    GtkWidget* owner, const OpenFileDialogOptions& selection) {
+  auto* dialog = gtk_file_chooser_dialog_new(
+      "选择本地文件", GTK_WINDOW(owner), GTK_FILE_CHOOSER_ACTION_OPEN,
+      "取消", GTK_RESPONSE_CANCEL, "选择", GTK_RESPONSE_ACCEPT, nullptr);
+  gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog),
+                                       selection.multiple);
+  for (const auto& filter_config : selection.filters) {
+    auto* filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, filter_config.name.c_str());
+    for (const auto& extension : filter_config.extensions) {
+      const auto pattern = extension == "*" ? "*" : "*." + extension;
+      gtk_file_filter_add_pattern(filter, pattern.c_str());
+    }
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+  }
+  const auto response = gtk_dialog_run(GTK_DIALOG(dialog));
+  if (response != GTK_RESPONSE_ACCEPT) {
+    gtk_widget_destroy(dialog);
+    return std::nullopt;
+  }
+  auto* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+  gtk_widget_destroy(dialog);
+  std::vector<std::filesystem::path> selected;
+  for (auto* item = filenames; item; item = item->next) {
+    if (item->data) selected.emplace_back(static_cast<const char*>(item->data));
+  }
+  g_slist_free_full(filenames, g_free);
+  if (selected.size() > 256)
+    throw IpcException("IO_ERROR", "Selected file count is invalid");
+  return selected;
+}
+
 void OnIpcScriptMessage(WebKitUserContentManager*, WebKitJavascriptResult* result,
                         gpointer data) {
   auto* state = static_cast<RuntimeState*>(data);
@@ -361,10 +395,12 @@ int RunPayloadApp(const LoadedPayload& payload) {
   SingleInstanceGuard instance_guard(app_id);
 
   std::unique_ptr<ResourceServer> server;
+  auto file_grants = std::make_shared<LocalFileGrantManager>(&logger);
   std::string navigation;
   std::string local_origin;
   if (payload.manifest.mode == AppMode::Local) {
-    server = std::make_unique<ResourceServer>(payload, SecurityLimits{}, &logger);
+    server = std::make_unique<ResourceServer>(payload, SecurityLimits{}, &logger,
+                                              file_grants);
     auto base = server->Start();
     local_origin = base;
     while (!local_origin.empty() && local_origin.back() == '/') local_origin.pop_back();
@@ -432,6 +468,10 @@ int RunPayloadApp(const LoadedPayload& payload) {
     services.platform = "linux";
     services.runtime_version = kVersion;
     services.select_directory = [window] { return ChooseIpcDirectory(window); };
+    services.open_files = [window](const OpenFileDialogOptions& options) {
+      return ChooseIpcFiles(window, options);
+    };
+    services.file_grants = file_grants;
     state.ipc_dispatcher =
         std::make_shared<IpcDispatcher>(payload.manifest, std::move(services));
     logger.Info("Native IPC bridge enabled");

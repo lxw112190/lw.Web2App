@@ -11,16 +11,34 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace lwweb {
 
 enum class IpcExecution { Immediate, Worker, UiThread };
+
+// 系统文件选择窗口使用的安全过滤器；extensions 不包含通配符或路径字符。
+struct OpenFileFilter {
+  std::string name;
+  std::vector<std::string> extensions;
+};
+
+// dialog.openFile 的平台无关参数。无论单选或多选，IPC 统一返回 files[]。
+struct OpenFileDialogOptions {
+  bool multiple = false;
+  std::vector<OpenFileFilter> filters;
+};
+
+class LocalFileGrantManager;
 
 struct IpcRuntimeServices {
   std::string platform;
   std::string arch = "x64";
   std::string runtime_version;
   std::function<std::optional<std::filesystem::path>()> select_directory;
+  std::function<std::optional<std::vector<std::filesystem::path>>(
+      const OpenFileDialogOptions&)> open_files;
+  std::shared_ptr<LocalFileGrantManager> file_grants;
 };
 
 // 共享的请求校验、Capability 判定和方法分发器。WebView2/WebKitGTK 仅负责

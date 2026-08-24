@@ -9,14 +9,17 @@
     button{margin:4px;padding:9px 15px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
     pre{min-height:120px;padding:16px;border-radius:10px;background:#f1f5f9;white-space:pre-wrap}
     .note{color:#64748b}
+    #file-link{display:none;margin:12px 4px;color:#2563eb}
   </style>
 </head>
 <body>
   <h1>Native IPC 权限示例</h1>
   <p class="note">先通过系统窗口选择目录；授权仅在本次应用运行期间有效。</p>
   <button id="select">选择并授权目录</button>
+  <button id="open-file">选择本地文件</button>
   <button id="exists" disabled>检查目录</button>
   <button id="list" disabled>列出目录</button>
+  <a id="file-link">通过本地文件桥打开</a>
   <pre id="output">正在读取应用信息…</pre>
   <script>
     const output=document.querySelector('#output');
@@ -27,6 +30,21 @@
       catch(error){show({code:error.code,message:error.message});throw error}
     }
     invoke('app.getInfo').then(show);
+    document.querySelector('#open-file').onclick=async()=>{
+      const result=await invoke('dialog.openFile',{
+        multiple:false,
+        filters:[
+          {name:'PDF、图片、音视频',extensions:['pdf','png','jpg','jpeg','webp','mp3','mp4']},
+          {name:'所有文件',extensions:['*']}
+        ]
+      });
+      const file=result.files[0];
+      const link=document.querySelector('#file-link');
+      link.href=file.url;
+      link.textContent=`通过本地文件桥打开：${file.name}`;
+      link.style.display='inline-block';
+      show(result);
+    };
     document.querySelector('#select').onclick=async()=>{
       const result=await invoke('dialog.selectDirectory');
       directory=result.path;

@@ -113,6 +113,76 @@ std::optional<std::filesystem::path> ChooseDirectory(HWND owner) {
   return selected;
 }
 
+std::optional<std::vector<std::filesystem::path>> ChooseFiles(
+    HWND owner, const OpenFileDialogOptions& selection) {
+  Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog))))
+    throw IpcException("UNSUPPORTED", "System file dialog is unavailable");
+  FILEOPENDIALOGOPTIONS options{};
+  if (SUCCEEDED(dialog->GetOptions(&options))) {
+    options |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST |
+               FOS_NOCHANGEDIR;
+    if (selection.multiple) options |= FOS_ALLOWMULTISELECT;
+    dialog->SetOptions(options);
+  }
+  dialog->SetTitle(L"选择本地文件");
+
+  std::vector<std::wstring> names;
+  std::vector<std::wstring> patterns;
+  std::vector<COMDLG_FILTERSPEC> filters;
+  names.reserve(selection.filters.size());
+  patterns.reserve(selection.filters.size());
+  filters.reserve(selection.filters.size());
+  for (const auto& filter : selection.filters) {
+    names.push_back(Utf8ToWide(filter.name));
+    std::wstring pattern;
+    for (const auto& extension : filter.extensions) {
+      if (!pattern.empty()) pattern += L";";
+      pattern += L"*." + Utf8ToWide(extension);
+    }
+    patterns.push_back(std::move(pattern));
+  }
+  for (std::size_t i = 0; i < names.size(); ++i)
+    filters.push_back({names[i].c_str(), patterns[i].c_str()});
+  if (!filters.empty() &&
+      FAILED(dialog->SetFileTypes(static_cast<UINT>(filters.size()), filters.data())))
+    throw IpcException("IO_ERROR", "Cannot configure system file filters");
+
+  const auto shown = dialog->Show(owner);
+  if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return std::nullopt;
+  if (FAILED(shown)) throw IpcException("IO_ERROR", "System file dialog failed");
+
+  std::vector<std::filesystem::path> selected;
+  const auto append_item = [&selected](IShellItem* item) {
+    PWSTR path = nullptr;
+    if (!item || FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path)
+      throw IpcException("IO_ERROR", "Selected item is not a local file");
+    selected.emplace_back(path);
+    CoTaskMemFree(path);
+  };
+  if (selection.multiple) {
+    Microsoft::WRL::ComPtr<IShellItemArray> results;
+    if (FAILED(dialog->GetResults(&results)))
+      throw IpcException("IO_ERROR", "Cannot read selected files");
+    DWORD count = 0;
+    if (FAILED(results->GetCount(&count)) || count > 256)
+      throw IpcException("IO_ERROR", "Selected file count is invalid");
+    for (DWORD i = 0; i < count; ++i) {
+      Microsoft::WRL::ComPtr<IShellItem> item;
+      if (FAILED(results->GetItemAt(i, &item)))
+        throw IpcException("IO_ERROR", "Cannot read a selected file");
+      append_item(item.Get());
+    }
+  } else {
+    Microsoft::WRL::ComPtr<IShellItem> result;
+    if (FAILED(dialog->GetResult(&result)))
+      throw IpcException("IO_ERROR", "Cannot read selected file");
+    append_item(result.Get());
+  }
+  return selected;
+}
+
 struct PendingIpcResponse {
   std::shared_ptr<IpcDispatcher> dispatcher;
   std::string method;
@@ -138,7 +208,8 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
                          const std::string& local_origin, const Manifest& manifest,
                          std::function<void(const std::wstring&)> on_error,
                          std::function<void(bool)> on_fullscreen_changed,
-                         const Logger* logger) {
+                         const Logger* logger,
+                         std::shared_ptr<LocalFileGrantManager> file_grants) {
   window_ = window;
   url_ = url;
   local_origin_ = local_origin;
@@ -151,6 +222,10 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
     services.platform = "windows";
     services.runtime_version = kVersion;
     services.select_directory = [this] { return ChooseDirectory(window_); };
+    services.open_files = [this](const OpenFileDialogOptions& options) {
+      return ChooseFiles(window_, options);
+    };
+    services.file_grants = std::move(file_grants);
     ipc_dispatcher_ =
         std::make_shared<IpcDispatcher>(manifest_, std::move(services));
   }

@@ -20,6 +20,7 @@ namespace lwweb {
 
 class Logger;
 class BackendProxy;
+class LocalFileGrantManager;
 
 // 为同一 app_id 选择稳定的动态端口，使浏览器 origin 跨重启保持不变。
 // 端口位于 IANA dynamic/private 范围 49152-65535。
@@ -52,7 +53,8 @@ class ZipResourceStore {
 class ResourceServer {
  public:
   ResourceServer(const LoadedPayload& payload, SecurityLimits limits = {},
-                 const Logger* logger = nullptr);
+                 const Logger* logger = nullptr,
+                 std::shared_ptr<LocalFileGrantManager> file_grants = nullptr);
   ~ResourceServer();
   ResourceServer(const ResourceServer&) = delete;
   ResourceServer& operator=(const ResourceServer&) = delete;
@@ -65,6 +67,7 @@ class ResourceServer {
   SecurityLimits limits_;
   std::unique_ptr<ZipResourceStore> store_;
   std::unique_ptr<BackendProxy> backend_proxy_;
+  std::shared_ptr<LocalFileGrantManager> file_grants_;
   std::unique_ptr<httplib::Server> server_;
   std::thread thread_;
   int port_ = 0;

@@ -26,6 +26,7 @@
       "capabilities": [
         "app.info",
         "dialog.directory",
+        "dialog.file",
         "fs.exists",
         "fs.list",
         "fs.copy",

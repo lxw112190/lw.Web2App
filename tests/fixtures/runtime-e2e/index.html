@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>lw.Web2App Runtime E2E</title>
+</head>
+<body>
+  <p id="status">正在验证 Windows Runtime 与 Native IPC…</p>
+  <script>
+    const expectedAppId = 'com.lwweb.ci.runtime-e2e';
+    const status = document.querySelector('#status');
+
+    (async () => {
+      try {
+        const info = await window.lw.invoke('app.getInfo');
+        if (info.appId !== expectedAppId || info.platform !== 'windows' || info.arch !== 'x64') {
+          throw new Error(`Unexpected app info: ${JSON.stringify(info)}`);
+        }
+        document.documentElement.dataset.e2e = 'passed';
+        status.textContent = 'Windows Runtime E2E 通过';
+        console.error(
+          `LWWEB_E2E_IPC_OK appId=${info.appId};platform=${info.platform};arch=${info.arch}`
+        );
+      } catch (error) {
+        document.documentElement.dataset.e2e = 'failed';
+        status.textContent = `Windows Runtime E2E 失败：${error.message}`;
+        console.error(`LWWEB_E2E_IPC_FAIL ${error.stack || error.message || error}`);
+      }
+    })();
+  </script>
+</body>
+</html>

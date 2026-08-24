@@ -3,6 +3,7 @@
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
+#include "lwweb/runtime/local_file_grant.h"
 #include "lwweb/runtime/resource_server.h"
 #ifdef _WIN32
 #include "lwweb/pe/pe_resources.h"
@@ -203,6 +204,16 @@ void RunPayloadTests() {
   std::string backend_origin_header;
   std::string backend_range_header;
   const std::string download_data(2 * 1024 * 1024, 'D');
+  std::string local_file_data(2 * 1024 * 1024, '\0');
+  for (std::size_t i = 0; i < local_file_data.size(); ++i)
+    local_file_data[i] = static_cast<char>(i % 251);
+  const auto local_file_path =
+      base / std::filesystem::u8path(u8"本地文档.pdf");
+  {
+    std::ofstream local_file(local_file_path, std::ios::binary);
+    local_file.write(local_file_data.data(),
+                     static_cast<std::streamsize>(local_file_data.size()));
+  }
   BackendServerGuard backend;
   Check(backend.Bind([&](httplib::Server& server) {
           server.Post("/sysUser/login", [&](const httplib::Request& request,
@@ -395,7 +406,13 @@ void RunPayloadTests() {
   Check(stable_port != lwweb::StableAppPort("app-a-different-id"),
         "different app IDs distribute across ports");
   {
-    lwweb::ResourceServer fallback_server(loaded);
+    auto file_grants = std::make_shared<lwweb::LocalFileGrantManager>();
+    const auto local_grant = file_grants->Create(local_file_path);
+    Check(local_grant.id.size() == 32 &&
+              local_grant.url.find(local_file_path.parent_path().u8string()) ==
+                  std::string::npos,
+          "local file grant uses an opaque URL without the disk path");
+    lwweb::ResourceServer fallback_server(loaded, {}, nullptr, file_grants);
     const auto address = fallback_server.Start();
     Check(address != "http://127.0.0.1:" + std::to_string(stable_port) + "/",
           "occupied preferred port selects a fallback port");
@@ -404,6 +421,70 @@ void RunPayloadTests() {
         {"Origin", address.substr(0, address.size() - 1)},
         {"Referer", address + "login.html"},
         {"Sec-Fetch-Site", "same-origin"}};
+    const auto local_full = application.Get(local_grant.url);
+    Check(local_full && local_full->status == 200 &&
+              local_full->body == local_file_data,
+          "local file bridge streams a complete granted file");
+    Check(local_full->get_header_value("Accept-Ranges") == "bytes" &&
+              local_full->get_header_value("Cache-Control") == "private, no-store" &&
+              local_full->get_header_value("X-Content-Type-Options") == "nosniff",
+          "local file bridge emits private read-only response headers");
+    const auto local_head = application.Head(local_grant.url);
+    Check(local_head && local_head->status == 200 && local_head->body.empty() &&
+              local_head->get_header_value("Content-Length") ==
+                  std::to_string(local_file_data.size()) &&
+              local_head->get_header_value("Content-Type") == "application/pdf",
+          "local file bridge HEAD returns metadata without a body");
+    httplib::Headers local_range_headers = {{"Range", "bytes=65536-131071"}};
+    const auto local_range = application.Get(local_grant.url, local_range_headers);
+    Check(local_range && local_range->status == 206 &&
+              local_range->body == local_file_data.substr(65536, 65536) &&
+              local_range->get_header_value("Content-Range") ==
+                  "bytes 65536-131071/" + std::to_string(local_file_data.size()),
+          "local file bridge streams a bounded single byte range");
+    const auto local_open_range = application.Get(
+        local_grant.url, httplib::Headers{{"Range", "bytes=1048576-"}});
+    Check(local_open_range && local_open_range->status == 206 &&
+              local_open_range->body == local_file_data.substr(1048576),
+          "local file bridge supports open-ended byte ranges");
+    const auto local_suffix_range = application.Get(
+        local_grant.url, httplib::Headers{{"Range", "bytes=-65536"}});
+    Check(local_suffix_range && local_suffix_range->status == 206 &&
+              local_suffix_range->body ==
+                  local_file_data.substr(local_file_data.size() - 65536),
+          "local file bridge supports suffix byte ranges");
+    const auto invalid_local_range = application.Get(
+        local_grant.url, httplib::Headers{{"Range", "bytes=9999999-"}});
+    Check(invalid_local_range && invalid_local_range->status == 416 &&
+              invalid_local_range->get_header_value("Content-Range") ==
+                  "bytes */" + std::to_string(local_file_data.size()),
+          "local file bridge rejects an unsatisfiable byte range");
+    const auto multiple_local_range = application.Get(
+        local_grant.url,
+        httplib::Headers{{"Range", "bytes=0-99,200-299"}});
+    Check(multiple_local_range && multiple_local_range->status == 416,
+          "local file bridge rejects multipart ranges in the first version");
+    const auto display_separator = local_grant.url.find_last_of('/');
+    const auto changed_display_url =
+        local_grant.url.substr(0, display_separator + 1) + "other-name.pdf";
+    const auto changed_display = application.Get(changed_display_url);
+    Check(changed_display && changed_display->status == 200 &&
+              changed_display->body == local_file_data,
+          "display filename never changes the file bound to a grant token");
+    const auto token_start = std::string("/__lw_file__/").size();
+    const auto grant_token = local_grant.url.substr(token_start, 32);
+    const auto traversal = application.Get(
+        "/__lw_file__/" + grant_token + "/../other.pdf");
+    Check(traversal && traversal->status == 404,
+          "local file bridge rejects traversal in the display path");
+    const auto unknown_grant = application.Get(
+        "/__lw_file__/0123456789abcdef0123456789abcdef/missing.pdf");
+    Check(unknown_grant && unknown_grant->status == 404,
+          "unknown local file grant returns 404");
+    const auto local_write = application.Post(local_grant.url, "change", "text/plain");
+    Check(local_write && local_write->status == 405 &&
+              local_write->get_header_value("Allow") == "GET, HEAD",
+          "local file bridge rejects non-read methods before reading a body");
     const auto login = application.Post(
         "/__lw_proxy__/sysUser/login?source=test", page_headers,
         std::string(R"({"message":"proxy-test"})"),
@@ -459,6 +540,11 @@ void RunPayloadTests() {
     Check(partial->get_header_value("Content-Range") ==
               "bytes 1024-2047/" + std::to_string(download_data.size()),
           "download Content-Range is preserved");
+    Check(file_grants->Revoke(local_grant.id),
+          "local file grant can be explicitly revoked");
+    const auto revoked_local_file = application.Get(local_grant.url);
+    Check(revoked_local_file && revoked_local_file->status == 404,
+          "revoked local file grant becomes unavailable immediately");
     fallback_server.Stop();
   }
   lwweb::ZipResourceStore store(loaded);
@@ -468,6 +554,20 @@ void RunPayloadTests() {
   Check(std::string(resource.begin(), resource.end()) == "body{color:red}",
         "ZIP resource extracts on demand");
   Check(!store.Exists("../index.html"), "unsafe runtime path rejected");
+
+  std::filesystem::create_directories(base / "site" / "__lw_file__");
+  std::ofstream(base / "site" / "__lw_file__" / "collision.txt") << "reserved";
+  auto reserved_pack = pack;
+  reserved_pack.output = base / "reserved-route.exe";
+  bool reserved_resource_rejected = false;
+  try {
+    lwweb::PackApplication(reserved_pack);
+  } catch (...) {
+    reserved_resource_rejected = true;
+  }
+  Check(reserved_resource_rejected,
+        "packaging rejects resources under the local file bridge route");
+  std::filesystem::remove_all(base / "site" / "__lw_file__", ignored);
 
   // ZIP 阶段故意失败时，已经存在的正式产物必须保持逐字节不变，且暂存文件
   // 必须被清理。这覆盖“临时文件完整构建 + 成功后原子替换”的回归行为。
@@ -521,5 +621,15 @@ void RunPayloadTests() {
   Check(proxy_round_trip.backend_proxy.enabled &&
             proxy_round_trip.backend_proxy.origin == "http://127.0.0.1:18080",
         "controlled backend proxy survives manifest round trip");
+  auto reserved_proxy_manifest = proxy_manifest;
+  reserved_proxy_manifest.backend_proxy.prefix = "/__lw_file__/proxy";
+  bool reserved_proxy_rejected = false;
+  try {
+    lwweb::ValidateManifest(reserved_proxy_manifest);
+  } catch (...) {
+    reserved_proxy_rejected = true;
+  }
+  Check(reserved_proxy_rejected,
+        "backend proxy cannot overlap the local file bridge route");
   std::filesystem::remove_all(base, ignored);
 }

@@ -40,7 +40,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
 - Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
 - 可选的受控后台代理把 `/__lw_proxy__/...` 同源请求转发到 Manifest 固定的传统 HTTP Origin，不需要关闭 WebView 安全策略，Windows 与 Linux 共用同一实现。
-- 可选 Native IPC 通过稳定的 `window.lw.invoke()` API 为可信本地页面提供应用信息、系统目录选择和受权限约束的文件操作；默认关闭且按方法授权。
+- 可选 Native IPC 通过稳定的 `window.lw.invoke()` API 为可信本地页面提供应用信息、系统目录/文件选择和受权限约束的文件操作；Session Local File Bridge 通过 localhost HTTP 流式提供大型本地文件；默认关闭且按方法授权。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
 - 拒绝绝对路径、盘符、`..`、NUL、重复 ZIP 路径。
 - 限制资源数量、单文件大小和总解压大小，降低 ZIP 炸弹风险。
@@ -176,7 +176,7 @@ Linux Artifact 额外包含 lw.Web2App 的 `.deb`、便携 `.tar.gz`、生成的
 
 [wechat-article-formatter](https://github.com/lxw112190/wechat-article-formatter) 是一个面向微信公众号的纯前端 Markdown 排版与编辑工具，采用 Vite、React 和 TypeScript，支持主题排版、手机预览及复制富文本正文。CI 会检出该项目的 `main` 分支，执行 `npm ci` 和 `npm run build` 生成 `dist`，再用本次构建的 lw.Web2App 将它打包成 `examples/wechat-article-formatter.exe`。随后运行 `inspect` 重新读取 Manifest 并验证 Payload SHA-256；任一步失败都会使工作流失败。
 
-这个示例同时验证了真实 Vite/React 产物、中文标题、较多静态资源、SPA fallback、Windows PE 元数据、Linux ELF 权限和最终分发流程。Linux CI 还会在 Xvfb 中启动生成应用，并检查 WebKitGTK 初始化与导航完成日志。应用数据保存在各平台对应的本地浏览器存储中，请像使用网页版本一样定期导出备份。
+这个示例同时验证了真实 Vite/React 产物、中文标题、较多静态资源、SPA fallback、Windows PE 元数据、Linux ELF 权限和最终分发流程。Windows CI 还会真实启动一个生成应用，在 WebView2 页面中调用 `app.getInfo`，并从 Runtime 日志确认 WebView2 初始化、导航和 Native IPC 往返全部成功；Linux CI 会在 Xvfb 中启动生成应用，并检查 WebKitGTK 初始化与导航完成日志。应用数据保存在各平台对应的本地浏览器存储中，请像使用网页版本一样定期导出备份。
 
 ## 从源码构建
 
@@ -389,7 +389,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
 - `--ipc`：为本地打包模式启用 Native IPC；在线 URL 模式禁止启用。
-- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`fs.exists`、`fs.list`、`fs.copy`、`fs.move`、`fs.delete`。
+- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`dialog.file`、`fs.exists`、`fs.list`、`fs.copy`、`fs.move`、`fs.delete`。
 - `--ipc-root`：重复传入文件系统固定根目录；支持 `${HOME}`、`${DESKTOP}`、`${DOCUMENTS}`、`${PICTURES}`、`${DOWNLOADS}`、`${APP_DATA}`、`${APP_CACHE}`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
@@ -438,6 +438,7 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --title "Native IPC 示例" --windowed --ipc `
   --ipc-capability app.info `
   --ipc-capability dialog.directory `
+  --ipc-capability dialog.file `
   --ipc-capability fs.exists `
   --ipc-capability fs.list `
   --ipc-capability fs.copy `
@@ -473,6 +474,53 @@ if (state.exists) {
   });
 }
 ```
+
+### 受控本地文件桥
+
+大型 PDF、视频、图片和音频不应经过 JSON/Base64 IPC 传输。`dialog.file`
+Capability 提供 `dialog.openFile`：Native IPC 只负责显示系统文件窗口并创建
+当前进程有效的随机授权，文件内容由同源 localhost HTTP 数据面流式提供：
+
+```js
+const result = await lw.invoke("dialog.openFile", {
+  multiple: false,
+  filters: [
+    { name: "PDF documents", extensions: ["pdf"] }
+  ]
+});
+
+const file = result.files[0];
+// {
+//   id: "128-bit-random-id",
+//   name: "document.pdf",
+//   size: 125873421,
+//   mime: "application/pdf",
+//   url: "/__lw_file__/<opaque-id>/document.pdf"
+// }
+const loadingTask = pdfjsLib.getDocument({ url: file.url });
+```
+
+单选和多选始终统一返回 `files[]`；`multiple: true` 在 Windows 使用
+`IFileOpenDialog` 多选，在 Linux 使用 GTK File Chooser。`filters` 最多 16 组，
+每组最多 32 个无路径字符的扩展名；`"*"` 表示所有文件。网页不会得到真实磁盘
+路径，URL 的显示文件名也不参与磁盘定位。只有 Native 对话框选中的规范化普通文件
+才能生成至少 128 bit 的不可预测授权 ID；Windows 设备命名空间和 UNC 路径会被拒绝。
+
+`/__lw_file__/` 只接受 `GET` 和 `HEAD`，支持单个 `Range`（固定区间、开放结束
+区间和 suffix 区间），分别正确返回 `200`、`206`、`404`、`405` 或 `416`。
+响应包含 `Accept-Ranges: bytes`、准确的 `Content-Length`/`Content-Range`、
+`X-Content-Type-Options: nosniff` 和 `Cache-Control: private, no-store`。
+文件以 64 KiB 缓冲流式读取，内存占用与文件大小无关；多区间请求第一版返回
+`416`。授权只存在于当前 Runtime 内存中，应用退出后全部失效，也可以主动撤销：
+
+```js
+await lw.invoke("file.revoke", { id: file.id });
+```
+
+常规文件管理仍使用 `fs.copy`、`fs.move`、`fs.delete` 等 IPC 方法；本地文件桥只提供
+大型文件的只读数据面。URL 模式不能启用 Native IPC，因此也不能获得本地文件授权。
+INFO 日志仅记录授权创建/释放和完整或区间读取，不记录真实路径、文件名或完整 Token；
+DEBUG 最多记录 Token 前 8 位、文件大小与 MIME。
 
 协议版本为 `lw-ipc-v1`，请求和响应使用 JSON。消息最大 1 MiB，ID/方法名最大 128 字节，同一页面最多保留 64 个待处理请求，重复 ID 返回 `BUSY`。错误码稳定为 `INVALID_REQUEST`、`INVALID_ARGUMENT`、`METHOD_NOT_FOUND`、`PERMISSION_DENIED`、`USER_CANCELLED`、`NOT_FOUND`、`ALREADY_EXISTS`、`IO_ERROR`、`UNSUPPORTED`、`BUSY` 和 `INTERNAL_ERROR`。
 
@@ -522,7 +570,7 @@ Binding 摘要与 Footer 一致，最后调用 WinVerifyTrust 验证保护该 PE
 - Manifest 最大 1 MiB。
 - HTTP 服务仅绑定 IPv4 loopback，且必须提供精确的应用专属端口 Host。
 - 后台代理只接受 Manifest 固定的 `http://` Origin；拒绝任意 URL、跨站来源、跨 Host 重定向和与代理前缀冲突的 ZIP 资源，并限制请求/响应大小与超时。
-- Native IPC 默认关闭，只支持本地打包模式；Capability、精确 Origin、固定根目录和临时目录授权会在 Native 侧强制执行。
+- Native IPC 默认关闭，只支持本地打包模式；Capability、精确 Origin、固定根目录、临时目录授权和 Session FileGrant 会在 Native 侧强制执行。本地文件桥不接受网页传入路径，只按随机 Token 只读流式响应。
 - SHA-256 可以检测损坏或修改，但不能验证发布者身份；需要发布者身份时应使用 Windows CLI 的 Authenticode 选项并妥善保护代码签名私钥。
 
 ## 项目结构
@@ -551,10 +599,11 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 4. Windows 与 Ubuntu 都执行 `publish` 冒烟测试，并校验 ZIP/tar.gz、`SHA256SUMS.txt` 和 `RELEASE_INFO.json`。
 5. Windows CI 使用真实 Inno Setup 生成 Installer，并验证 Portable 与 Setup 的 Authenticode 签名。
 6. Ubuntu CI 为生成应用构建真实 DEB，并用 `dpkg-deb --info/--contents` 校验依赖、ELF、desktop 与图标。
-7. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
-8. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
-9. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
-10. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
+7. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置，并对本地文件桥执行完整读取、HEAD、单 Range、错误 Token、路径穿越、只读方法和撤销测试。
+8. Windows 真实启动生成的测试 EXE，在 WebView2 页面调用 `app.getInfo`，并从 Runtime 日志校验初始化、导航、IPC 请求和响应；失败时上传诊断日志。
+9. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
+10. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
+11. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
 
 ## 第三方依赖
 

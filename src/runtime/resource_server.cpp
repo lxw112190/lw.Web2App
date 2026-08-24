@@ -4,13 +4,17 @@
 #include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
 #include "lwweb/runtime/backend_proxy.h"
+#include "lwweb/runtime/local_file_grant.h"
 
 #include <httplib.h>
 #include <miniz.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <regex>
 
 namespace lwweb {
@@ -19,6 +23,118 @@ namespace {
 std::string RegexEscape(const std::string& value) {
   static const std::regex special(R"([.^$|()\[\]{}*+?\\])");
   return std::regex_replace(value, special, R"(\$&)");
+}
+
+constexpr char kLocalFilePrefix[] = "/__lw_file__";
+
+std::optional<std::string> LocalFileGrantId(const std::string& path) {
+  const std::string prefix = std::string(kLocalFilePrefix) + "/";
+  if (path.rfind(prefix, 0) != 0) return std::nullopt;
+  const auto remainder = path.substr(prefix.size());
+  const auto separator = remainder.find('/');
+  if (separator != 32 || separator + 1 >= remainder.size()) return std::nullopt;
+  const auto id = remainder.substr(0, separator);
+  if (!std::all_of(id.begin(), id.end(), [](unsigned char character) {
+        return std::isdigit(character) || (character >= 'a' && character <= 'f');
+      }))
+    return std::nullopt;
+  const auto display_name = remainder.substr(separator + 1);
+  if (display_name == "." || display_name == ".." ||
+      display_name.find('/') != std::string::npos ||
+      display_name.find('\\') != std::string::npos ||
+      std::any_of(display_name.begin(), display_name.end(), [](unsigned char character) {
+        return character == 0 || character < 0x20 || character == 0x7f;
+      }))
+    return std::nullopt;
+  return id;
+}
+
+bool ValidSingleRange(const httplib::Request& request, std::uint64_t size,
+                      std::uint64_t& offset, std::uint64_t& end) {
+  if (request.ranges.empty()) {
+    offset = 0;
+    end = size ? size - 1 : 0;
+    return true;
+  }
+  if (request.ranges.size() != 1 || size == 0) return false;
+  const auto first = request.ranges.front().first;
+  const auto last = request.ranges.front().second;
+  if (first == -1) {
+    if (last <= 0 || static_cast<std::uint64_t>(last) > size) return false;
+    offset = size - static_cast<std::uint64_t>(last);
+    end = size - 1;
+    return true;
+  }
+  if (first < 0 || static_cast<std::uint64_t>(first) >= size) return false;
+  offset = static_cast<std::uint64_t>(first);
+  if (last == -1 || static_cast<std::uint64_t>(last) >= size)
+    end = size - 1;
+  else if (last < first)
+    return false;
+  else
+    end = static_cast<std::uint64_t>(last);
+  return true;
+}
+
+void SetLocalFileHeaders(httplib::Response& response) {
+  response.set_header("Accept-Ranges", "bytes");
+  response.set_header("Cache-Control", "private, no-store");
+  response.set_header("X-Content-Type-Options", "nosniff");
+  response.set_header("Referrer-Policy", "no-referrer");
+  response.set_header("Cross-Origin-Resource-Policy", "same-origin");
+}
+
+void HandleLocalFile(const httplib::Request& request, httplib::Response& response,
+                     std::uint16_t port,
+                     const std::shared_ptr<LocalFileGrantManager>& grants,
+                     const Logger* logger) {
+  if (!IsExpectedResourceHost(request.get_header_value("Host"), port)) {
+    response.status = 403;
+    return;
+  }
+  SetLocalFileHeaders(response);
+  const auto id = LocalFileGrantId(request.path);
+  const auto grant = id && grants ? grants->Find(*id) : std::nullopt;
+  if (!grant) {
+    response.status = 404;
+    return;
+  }
+
+  std::uint64_t offset = 0;
+  std::uint64_t end = 0;
+  if (!ValidSingleRange(request, grant->size, offset, end)) {
+    response.status = 416;
+    response.set_header("Content-Range", "bytes */" + std::to_string(grant->size));
+    return;
+  }
+  if (logger) {
+    if (request.ranges.empty())
+      logger->Info("Local file request: full");
+    else
+      logger->Info("Local file request: range " + std::to_string(offset) + "-" +
+                   std::to_string(end));
+  }
+
+  const auto path = grant->path;
+  response.set_content_provider(
+      static_cast<std::size_t>(grant->size), grant->mime,
+      [path](std::size_t stream_offset, std::size_t length,
+             httplib::DataSink& sink) {
+        std::ifstream input(path, std::ios::binary);
+        if (!input) return false;
+        input.seekg(static_cast<std::streamoff>(stream_offset));
+        if (!input) return false;
+        std::array<char, 64 * 1024> buffer{};
+        auto remaining = length;
+        while (remaining > 0) {
+          const auto part = (std::min)(remaining, buffer.size());
+          input.read(buffer.data(), static_cast<std::streamsize>(part));
+          if (static_cast<std::size_t>(input.gcount()) != part) return false;
+          if (!sink.write(buffer.data(), part)) return false;
+          remaining -= part;
+        }
+        return true;
+      });
 }
 
 }  // namespace
@@ -96,6 +212,9 @@ struct ZipResourceStore::Impl {
         if (*normalized == reserved || normalized->rfind(reserved + "/", 0) == 0)
           throw Error("ZIP resource conflicts with the backend proxy prefix");
       }
+      if (*normalized == "__lw_file__" ||
+          normalized->rfind("__lw_file__/", 0) == 0)
+        throw Error("ZIP resource conflicts with the local file bridge prefix");
     }
   }
 
@@ -142,8 +261,10 @@ std::vector<std::uint8_t> ZipResourceStore::Read(const std::string& path) {
 }
 
 ResourceServer::ResourceServer(const LoadedPayload& payload, SecurityLimits limits,
-                               const Logger* logger)
-    : payload_(payload), limits_(limits), logger_(logger) {}
+                               const Logger* logger,
+                               std::shared_ptr<LocalFileGrantManager> file_grants)
+    : payload_(payload), limits_(limits), file_grants_(std::move(file_grants)),
+      logger_(logger) {}
 
 ResourceServer::~ResourceServer() { Stop(); }
 
@@ -174,6 +295,23 @@ std::string ResourceServer::Start() {
                                        ? static_cast<std::size_t>(
                                              payload_.manifest.backend_proxy.max_request_size)
                                        : 1024u);
+    server->set_pre_routing_handler(
+        [this](const httplib::Request& request, httplib::Response& response) {
+          if (request.path != kLocalFilePrefix &&
+              request.path.rfind(std::string(kLocalFilePrefix) + "/", 0) != 0)
+            return httplib::Server::HandlerResponse::Unhandled;
+          if (request.method == "GET" || request.method == "HEAD")
+            return httplib::Server::HandlerResponse::Unhandled;
+          if (!IsExpectedResourceHost(request.get_header_value("Host"),
+                                      static_cast<std::uint16_t>(port_))) {
+            response.status = 403;
+          } else {
+            response.status = 405;
+            response.set_header("Allow", "GET, HEAD");
+            SetLocalFileHeaders(response);
+          }
+          return httplib::Server::HandlerResponse::Handled;
+        });
     if (backend_proxy_) {
       const auto pattern = "^" +
                            RegexEscape(payload_.manifest.backend_proxy.prefix) +
@@ -200,6 +338,13 @@ std::string ResourceServer::Start() {
       response.set_content("ok", "text/plain; charset=utf-8");
       response.set_header("Cache-Control", "no-store");
     });
+    server->Get("^/__lw_file__(?:/.*)?$",
+                [this](const httplib::Request& request,
+                       httplib::Response& response) {
+                  HandleLocalFile(request, response,
+                                  static_cast<std::uint16_t>(port_),
+                                  file_grants_, logger_);
+                });
     server->Get("/.*", [this](const httplib::Request& request, httplib::Response& response) {
       if (logger_ && logger_->DebugEnabled()) logger_->Debug("GET " + request.path);
       const auto host = request.get_header_value("Host");
