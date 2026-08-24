@@ -167,7 +167,7 @@ The artifact contains:
 - `lw.Web2App-vs2022-source.zip`, a portable, offline-buildable VS2022 solution
 - `SHA256SUMS.txt`
 
-Pushing a `v*` tag also creates a GitHub Release containing the ZIP distribution and its SHA-256 checksum file.
+Pushing a `v*` tag also creates a GitHub Release containing the ZIP distribution and its SHA-256 checksum file. The Release includes separate portable runtime archives for Ubuntu 22.04 and 24.04. Generic `.deb` packages, the CPack `.tar.gz`, and the example-application DEB come from the lower-baseline Ubuntu 22.04 build so matrix jobs never upload assets with duplicate names.
 
 Linux artifacts include a lw.Web2App `.deb`, a portable `.tar.gz`, the generated single-file `examples/wechat-article-formatter`, an application-specific Native IPC example DEB, and SHA-256 files. DEBs install desktop-menu metadata and declare GTK/WebKitGTK dependencies; portable packages and generated apps still require those libraries on the target Ubuntu system.
 

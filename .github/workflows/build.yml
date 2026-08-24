@@ -454,8 +454,12 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          preserve_order: true
           files: |
             dist/**/*.zip
-            dist/**/*.tar.gz
-            dist/**/*.deb
+            dist/lw.Web2App-linux-x64-ubuntu-*/lw.Web2App-linux-x64-ubuntu-*.tar.gz
+            dist/lw.Web2App-linux-x64-ubuntu-22.04/packages/*.tar.gz
+            dist/lw.Web2App-linux-x64-ubuntu-22.04/packages/*.deb
+            dist/lw.Web2App-linux-x64-ubuntu-22.04/lw.Web2App/examples/*.deb
             dist/**/SHA256SUMS*.txt

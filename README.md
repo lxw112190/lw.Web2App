@@ -168,7 +168,7 @@ Artifact 中包含：
 - `lw.Web2App-vs2022-source.zip` 可直接复制、离线编译的完整 VS2022 解决方案
 - `SHA256SUMS.txt`
 
-推送 `v*` 标签时，CI 还会创建 GitHub Release，并附加可直接下载的 ZIP 包和 SHA-256 校验文件。
+推送 `v*` 标签时，CI 还会创建 GitHub Release，并附加可直接下载的 ZIP 包和 SHA-256 校验文件。Release 同时提供 Ubuntu 22.04/24.04 各自的便携运行包；通用 `.deb`、CPack `.tar.gz` 和示例应用 DEB 统一取自兼容基线更低的 Ubuntu 22.04 构建，避免两个矩阵任务上传同名附件。
 
 Linux Artifact 额外包含 lw.Web2App 的 `.deb`、便携 `.tar.gz`、生成的单文件 `examples/wechat-article-formatter`、Native IPC 示例应用专属 DEB 以及各文件 SHA-256。`.deb` 安装 GTK/WebKitGTK 依赖并注册应用菜单；便携包与生成应用仍要求目标 Ubuntu 已安装运行库。
 
