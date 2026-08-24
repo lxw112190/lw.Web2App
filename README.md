@@ -239,6 +239,56 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
 
 也可以用 `-DLWWEB_DEPS_CACHE=目录` 指向其他缓存位置。
 
+## 项目配置 `lwweb.json`
+
+仓库已经提供严格的 `schema: 1` 项目配置模型，为下一阶段的 `publish` 命令提供唯一输入。它描述网页来源、应用身份、窗口、Runtime 和发布目标，不是写入生成应用内部的 Runtime Manifest；现有 `pack`、`pack-url` 和 `inspect` 命令保持不变。
+
+```json
+{
+  "schema": 1,
+  "app": {
+    "id": "com.example.myapp",
+    "name": "MyApp",
+    "version": "1.2.0",
+    "company": "Example Company",
+    "description": "Example desktop application",
+    "icon": "./icon.png"
+  },
+  "web": {
+    "source": "./dist",
+    "entry": "index.html",
+    "start_path": "/"
+  },
+  "window": {
+    "width": 1280,
+    "height": 800,
+    "fullscreen": false,
+    "resizable": true
+  },
+  "runtime": {
+    "spa_fallback": true,
+    "devtools": false,
+    "ipc": {
+      "enabled": false,
+      "capabilities": [],
+      "filesystem_roots": []
+    }
+  },
+  "publish": {
+    "output": "./release",
+    "windows": {
+      "portable": true,
+      "zip": true,
+      "installer": { "enabled": false },
+      "signing": { "enabled": false }
+    },
+    "linux": { "tar_gz": true, "deb": false }
+  }
+}
+```
+
+`web.source`、`app.icon`、`publish.output`、`signtool` 和 `iscc` 等相对路径始终以 `lwweb.json` 所在目录为基准，而不是当前终端目录。解析器拒绝未知字段、超过 1 MiB 的配置、非法版本/Manifest/Capability 以及 `password`、`token`、`secret`、PFX 等敏感字段；配置文件只允许保存证书指纹和时间戳 URL，不能保存证书密码。仓库中的 `examples/project-config/lwweb.json` 是完整示例。
+
 ## CLI 使用方法
 
 ### 打包本地静态目录
@@ -445,7 +495,8 @@ src/webview/   WebView2 宿主
 src/packer/    Manifest、Payload 和打包器
 src/runtime/   ZIP 资源读取、LRU、本地 HTTP 服务和受控后台代理
 src/ipc/       跨平台 IPC 协议、Capability、路径权限和方法调度
-src/pe/        图标和版本资源更新
+src/pe/        图标、版本资源、Payload Binding 和 Authenticode
+src/publish/   lwweb.json 项目/发布配置解析（Publisher 按阶段继续实现）
 src/common/    文件、路径和 SHA-256 工具
 tests/         单元测试与打包/读取集成测试
 ```

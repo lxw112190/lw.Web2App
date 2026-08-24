@@ -232,6 +232,56 @@ CMake first checks `.deps` in the repository root for these archives:
 
 If they are absent, CMake downloads pinned versions. Set `-DLWWEB_DEPS_CACHE=<directory>` to use another cache location.
 
+## Project Configuration: `lwweb.json`
+
+The repository now has a strict `schema: 1` project model that will be the single input to the next-stage `publish` command. It describes web input, application identity, window/runtime behavior, and publication targets. It is not the Runtime Manifest embedded in generated applications, and the existing `pack`, `pack-url`, and `inspect` commands remain unchanged.
+
+```json
+{
+  "schema": 1,
+  "app": {
+    "id": "com.example.myapp",
+    "name": "MyApp",
+    "version": "1.2.0",
+    "company": "Example Company",
+    "description": "Example desktop application",
+    "icon": "./icon.png"
+  },
+  "web": {
+    "source": "./dist",
+    "entry": "index.html",
+    "start_path": "/"
+  },
+  "window": {
+    "width": 1280,
+    "height": 800,
+    "fullscreen": false,
+    "resizable": true
+  },
+  "runtime": {
+    "spa_fallback": true,
+    "devtools": false,
+    "ipc": {
+      "enabled": false,
+      "capabilities": [],
+      "filesystem_roots": []
+    }
+  },
+  "publish": {
+    "output": "./release",
+    "windows": {
+      "portable": true,
+      "zip": true,
+      "installer": { "enabled": false },
+      "signing": { "enabled": false }
+    },
+    "linux": { "tar_gz": true, "deb": false }
+  }
+}
+```
+
+Relative paths such as `web.source`, `app.icon`, `publish.output`, `signtool`, and `iscc` are always resolved against the directory containing `lwweb.json`, never the shell's current directory. The parser rejects unknown fields, files over 1 MiB, invalid versions/manifests/capabilities, and secret-bearing fields such as `password`, `token`, `secret`, or PFX settings. A config may contain only a certificate thumbprint and timestamp URL, never a certificate password. The repository includes a complete example at `examples/project-config/lwweb.json`.
+
 ## CLI
 
 ### Package a local static directory
@@ -414,7 +464,8 @@ src/webview/   WebView2 host
 src/packer/    Manifest, payload, and packer
 src/runtime/   ZIP resource access, LRU cache, local HTTP server, and controlled backend proxy
 src/ipc/       Cross-platform IPC protocol, capabilities, path permissions, and dispatch
-src/pe/        Icon and version resource updates
+src/pe/        Icon/version resources, Payload Binding, and Authenticode
+src/publish/   lwweb.json project/publish configuration parsing (Publisher follows in stages)
 src/common/    File, path, and SHA-256 utilities
 tests/         Unit and packaging/resource integration tests
 ```

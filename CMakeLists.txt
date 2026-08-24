@@ -120,6 +120,7 @@ add_library(lwweb_core STATIC
   src/packer/payload.cpp
   src/packer/packer.cpp
   src/pe/payload_binding.cpp
+  src/publish/publish_config.cpp
   src/runtime/resource_cache.cpp
   src/runtime/backend_proxy.cpp
   src/runtime/proxy_stream.cpp
@@ -207,6 +208,7 @@ if(BUILD_TESTING)
     tests/test_main.cpp
     tests/payload_tests.cpp
     tests/path_tests.cpp
+    tests/publish_config_tests.cpp
     tests/resource_tests.cpp
     tests/signing_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)

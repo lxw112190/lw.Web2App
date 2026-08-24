@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "app": {
+    "id": "com.lwweb.examples.native-ipc",
+    "name": "Native IPC Example",
+    "version": "1.0.0",
+    "company": "天天代码码天天",
+    "description": "lw.Web2App Native IPC example"
+  },
+  "web": {
+    "source": "../native-ipc",
+    "entry": "index.html",
+    "start_path": "/"
+  },
+  "window": {
+    "width": 1280,
+    "height": 800,
+    "fullscreen": false,
+    "resizable": true
+  },
+  "runtime": {
+    "spa_fallback": true,
+    "devtools": false,
+    "ipc": {
+      "enabled": true,
+      "capabilities": [
+        "app.info",
+        "dialog.directory",
+        "fs.exists",
+        "fs.list",
+        "fs.copy",
+        "fs.move",
+        "fs.delete"
+      ],
+      "filesystem_roots": []
+    }
+  },
+  "publish": {
+    "output": "../../dist/publish",
+    "windows": {
+      "portable": true,
+      "zip": true,
+      "installer": {
+        "enabled": false,
+        "desktop_shortcut": true,
+        "start_menu": true
+      },
+      "signing": {
+        "enabled": false,
+        "certificate_thumbprint": "",
+        "timestamp_url": ""
+      }
+    },
+    "linux": {
+      "tar_gz": true,
+      "deb": false
+    }
+  }
+}
