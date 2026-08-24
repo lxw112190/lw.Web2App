@@ -3,6 +3,7 @@
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
+#include "lwweb/ipc/ipc_dispatcher.h"
 #include "lwweb/packer/packer.h"
 #include "lwweb/packer/payload.h"
 #include "lwweb/runtime/resource_server.h"
@@ -10,6 +11,7 @@
 #include "lwweb/version.h"
 
 #include <gtk/gtk.h>
+#include <openssl/rand.h>
 #include <webkit2/webkit2.h>
 
 #include <cctype>
@@ -89,6 +91,10 @@ std::string DefaultOutputPath() {
 struct RuntimeState {
   Logger* logger = nullptr;
   GtkWidget* window = nullptr;
+  WebKitWebView* view = nullptr;
+  std::shared_ptr<IpcDispatcher> ipc_dispatcher;
+  std::string local_origin;
+  std::string ipc_transport_token;
   bool fullscreen = false;
 };
 
@@ -142,6 +148,123 @@ void OnScriptMessage(WebKitUserContentManager*, WebKitJavascriptResult* result, 
   auto* text = jsc_value_to_string(value);
   state->logger->Error(std::string("[WEB-ERROR] ") + (text ? text : "unknown error"));
   g_free(text);
+}
+
+void SendIpcResponse(WebKitWebView* view, const IpcResponse& response) {
+  const auto script = "window.__lwIpcReceive&&window.__lwIpcReceive(" +
+                      SerializeIpcResponse(response) + ")";
+  webkit_web_view_run_javascript(view, script.c_str(), nullptr, nullptr, nullptr);
+}
+
+struct LinuxIpcResponse {
+  WebKitWebView* view = nullptr;
+  std::shared_ptr<IpcDispatcher> dispatcher;
+  Logger* logger = nullptr;
+  std::string method;
+  IpcResponse response;
+};
+
+gboolean ApplyIpcResponse(gpointer data) {
+  std::unique_ptr<LinuxIpcResponse> pending(static_cast<LinuxIpcResponse*>(data));
+  pending->dispatcher->End(pending->response.id);
+  if (pending->response.ok)
+    pending->logger->Info("IPC result: " + pending->method + " OK");
+  else
+    pending->logger->Warn("IPC failed: " + pending->method + " - " +
+                          pending->response.error.code);
+  SendIpcResponse(pending->view, pending->response);
+  g_object_unref(pending->view);
+  return G_SOURCE_REMOVE;
+}
+
+std::optional<std::filesystem::path> ChooseIpcDirectory(GtkWidget* owner) {
+  auto* dialog = gtk_file_chooser_dialog_new(
+      "选择授权目录", GTK_WINDOW(owner), GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
+      "取消", GTK_RESPONSE_CANCEL, "选择", GTK_RESPONSE_ACCEPT, nullptr);
+  const auto response = gtk_dialog_run(GTK_DIALOG(dialog));
+  if (response != GTK_RESPONSE_ACCEPT) {
+    gtk_widget_destroy(dialog);
+    return std::nullopt;
+  }
+  auto* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+  gtk_widget_destroy(dialog);
+  if (!filename)
+    throw IpcException("IO_ERROR", "Cannot read selected directory");
+  std::filesystem::path selected(filename);
+  g_free(filename);
+  return selected;
+}
+
+void OnIpcScriptMessage(WebKitUserContentManager*, WebKitJavascriptResult* result,
+                        gpointer data) {
+  auto* state = static_cast<RuntimeState*>(data);
+  if (!state->ipc_dispatcher) return;
+  const auto* current_uri = webkit_web_view_get_uri(state->view);
+  if (!current_uri || !IsAllowedIpcSource(current_uri, state->local_origin)) {
+    state->logger->Warn("Rejected Native IPC message from an untrusted origin");
+    return;
+  }
+  auto* value = webkit_javascript_result_get_js_value(result);
+  auto* raw = jsc_value_to_string(value);
+  const std::string text = raw ? raw : "";
+  g_free(raw);
+  const auto prefix = state->ipc_transport_token + ":";
+  if (state->ipc_transport_token.empty() || text.rfind(prefix, 0) != 0) {
+    state->logger->Warn("Rejected Native IPC message without the session transport token");
+    return;
+  }
+  IpcRequest request;
+  try {
+    request = ParseIpcRequest(text.substr(prefix.size()));
+  } catch (const IpcException& error) {
+    SendIpcResponse(state->view, MakeIpcError("", error.Code(), error.what()));
+    return;
+  }
+  if (!state->ipc_dispatcher->TryBegin(request.id)) {
+    SendIpcResponse(state->view,
+                    MakeIpcError(request.id, "BUSY",
+                                 "Duplicate or excessive pending request"));
+    return;
+  }
+  state->logger->Info("IPC request: " + request.method);
+  if (state->ipc_dispatcher->ExecutionFor(request.method) == IpcExecution::Worker) {
+    auto* view = WEBKIT_WEB_VIEW(g_object_ref(state->view));
+    const auto dispatcher = state->ipc_dispatcher;
+    auto* logger = state->logger;
+    std::thread([view, dispatcher, logger, request = std::move(request)]() mutable {
+      auto pending = std::make_unique<LinuxIpcResponse>();
+      pending->view = view;
+      pending->dispatcher = dispatcher;
+      pending->logger = logger;
+      pending->method = request.method;
+      pending->response = dispatcher->Dispatch(request);
+      g_idle_add(ApplyIpcResponse, pending.release());
+    }).detach();
+  } else {
+    const auto response = state->ipc_dispatcher->Dispatch(request);
+    state->ipc_dispatcher->End(request.id);
+    if (response.ok)
+      state->logger->Info("IPC result: " + request.method + " OK");
+    else
+      state->logger->Warn("IPC failed: " + request.method + " - " +
+                          response.error.code);
+    SendIpcResponse(state->view, response);
+  }
+}
+
+gboolean OnRuntimeDecidePolicy(WebKitWebView*, WebKitPolicyDecision* decision,
+                               WebKitPolicyDecisionType type, gpointer data) {
+  auto* state = static_cast<RuntimeState*>(data);
+  if (!state->ipc_dispatcher || type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)
+    return FALSE;
+  auto* navigation = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+  auto* action = webkit_navigation_policy_decision_get_navigation_action(navigation);
+  auto* request = webkit_navigation_action_get_request(action);
+  const auto* uri = webkit_uri_request_get_uri(request);
+  if (uri && IsAllowedIpcSource(uri, state->local_origin)) return FALSE;
+  webkit_policy_decision_ignore(decision);
+  state->logger->Warn("Blocked external navigation while Native IPC is enabled");
+  return TRUE;
 }
 
 // 在下载真正写盘前交给用户选择目标位置；不把文件名和本地路径写入日志，
@@ -240,9 +363,13 @@ int RunPayloadApp(const LoadedPayload& payload) {
 
   std::unique_ptr<ResourceServer> server;
   std::string navigation;
+  std::string local_origin;
   if (payload.manifest.mode == AppMode::Local) {
     server = std::make_unique<ResourceServer>(payload, SecurityLimits{}, &logger);
-    navigation = BuildLocalStartUrl(server->Start(), payload.manifest.start_path);
+    auto base = server->Start();
+    local_origin = base;
+    while (!local_origin.empty() && local_origin.back() == '/') local_origin.pop_back();
+    navigation = BuildLocalStartUrl(base, payload.manifest.start_path);
   } else {
     navigation = payload.manifest.url;
   }
@@ -268,6 +395,18 @@ int RunPayloadApp(const LoadedPayload& payload) {
                                         nullptr);
   webkit_user_content_manager_add_script(content, script);
   webkit_user_script_unref(script);
+  std::string ipc_transport_token;
+  if (payload.manifest.ipc.enabled) {
+    webkit_user_content_manager_register_script_message_handler(content, "lwIpc");
+    ipc_transport_token = RandomIpcTransportToken();
+    const auto bridge_text =
+        BuildIpcBridgeScript("linux", "linux", ipc_transport_token);
+    auto* ipc_script = webkit_user_script_new(
+        bridge_text.c_str(), WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
+        WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START, nullptr, nullptr);
+    webkit_user_content_manager_add_script(content, ipc_script);
+    webkit_user_script_unref(ipc_script);
+  }
 
   auto* view = WEBKIT_WEB_VIEW(g_object_new(WEBKIT_TYPE_WEB_VIEW, "web-context", context,
                                              "user-content-manager", content, nullptr));
@@ -282,14 +421,33 @@ int RunPayloadApp(const LoadedPayload& payload) {
   gtk_window_set_resizable(GTK_WINDOW(window), payload.manifest.resizable);
   gtk_container_add(GTK_CONTAINER(window), GTK_WIDGET(view));
 
-  RuntimeState state{&logger, window, payload.manifest.fullscreen};
+  RuntimeState state;
+  state.logger = &logger;
+  state.window = window;
+  state.view = view;
+  state.local_origin = local_origin;
+  state.ipc_transport_token = ipc_transport_token;
+  state.fullscreen = payload.manifest.fullscreen;
+  if (payload.manifest.ipc.enabled) {
+    IpcRuntimeServices services;
+    services.platform = "linux";
+    services.runtime_version = kVersion;
+    services.select_directory = [window] { return ChooseIpcDirectory(window); };
+    state.ipc_dispatcher =
+        std::make_shared<IpcDispatcher>(payload.manifest, std::move(services));
+    logger.Info("Native IPC bridge enabled");
+  }
   g_signal_connect(window, "destroy", G_CALLBACK(OnRuntimeDestroy), nullptr);
   g_signal_connect(window, "key-press-event", G_CALLBACK(OnRuntimeKey), &state);
   g_signal_connect(view, "load-changed", G_CALLBACK(OnLoadChanged), &state);
   g_signal_connect(view, "load-failed", G_CALLBACK(OnLoadFailed), &state);
   g_signal_connect(view, "web-process-terminated", G_CALLBACK(OnWebProcessTerminated), &state);
+  g_signal_connect(view, "decide-policy", G_CALLBACK(OnRuntimeDecidePolicy), &state);
   g_signal_connect(content, "script-message-received::lwWebError", G_CALLBACK(OnScriptMessage),
                    &state);
+  if (state.ipc_dispatcher)
+    g_signal_connect(content, "script-message-received::lwIpc",
+                     G_CALLBACK(OnIpcScriptMessage), &state);
   g_signal_connect(context, "download-started", G_CALLBACK(OnDownloadStarted), &state);
 
   logger.Info("WebKitGTK Runtime: " + std::to_string(webkit_get_major_version()) + "." +
@@ -356,6 +514,19 @@ std::string ComboText(GtkWidget* combo) {
   if (!text) return {};
   std::string result(text);
   g_free(text);
+  return result;
+}
+
+std::string RandomIpcTransportToken() {
+  unsigned char bytes[32]{};
+  if (RAND_bytes(bytes, sizeof(bytes)) != 1)
+    throw Error("Cannot generate the Native IPC session token");
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string result(sizeof(bytes) * 2, '0');
+  for (std::size_t i = 0; i < sizeof(bytes); ++i) {
+    result[i * 2] = hex[bytes[i] >> 4];
+    result[i * 2 + 1] = hex[bytes[i] & 0x0f];
+  }
   return result;
 }
 

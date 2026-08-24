@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace lwweb {
 
@@ -27,6 +28,14 @@ struct BackendProxyConfig {
   std::uint64_t max_response_size = 64ull * 1024 * 1024;
 };
 
+// 为本地页面开放的受控 Native IPC 能力。能力和文件系统根目录均由打包时固定，
+// Runtime 不接受网页临时扩大权限；系统目录选择器产生的授权只在本次会话有效。
+struct IpcConfig {
+  bool enabled = false;
+  std::vector<std::string> capabilities;
+  std::vector<std::string> filesystem_roots;
+};
+
 // 描述生成后桌面应用的运行方式和窗口行为。
 // 该结构与 Payload 中的 manifest.json 一一对应；新增字段必须保持向后兼容。
 struct Manifest {
@@ -45,6 +54,7 @@ struct Manifest {
   bool fullscreen = true;
   bool devtools = false;
   BackendProxyConfig backend_proxy;
+  IpcConfig ipc;
   bool spa_fallback = true;
   LoggingConfig logging;
   // 仅用于读取 LWWEB001；LWWEB002 的内容摘要存放在 Footer，避免循环依赖。

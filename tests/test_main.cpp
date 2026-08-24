@@ -1,6 +1,7 @@
 #include <iostream>
 
 void RunCliTests();
+void RunIpcTests();
 void RunPayloadTests();
 void RunPathTests();
 void RunResourceTests();
@@ -8,6 +9,7 @@ void RunResourceTests();
 int main() {
   try {
     RunCliTests();
+    RunIpcTests();
     RunPayloadTests();
     RunPathTests();
     RunResourceTests();

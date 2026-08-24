@@ -112,6 +112,9 @@ add_library(lwweb_core STATIC
   src/common/pe_version.cpp
   src/common/path_utils.cpp
   src/common/sha256.cpp
+  src/ipc/ipc_dispatcher.cpp
+  src/ipc/ipc_message.cpp
+  src/ipc/ipc_permissions.cpp
   src/packer/manifest.cpp
   src/packer/payload.cpp
   src/packer/packer.cpp
@@ -196,6 +199,7 @@ include(CTest)
 if(BUILD_TESTING)
   add_executable(lwweb_tests
     tests/cli_tests.cpp
+    tests/ipc_tests.cpp
     tests/test_main.cpp
     tests/payload_tests.cpp
     tests/path_tests.cpp

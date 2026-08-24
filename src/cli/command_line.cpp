@@ -26,6 +26,21 @@ std::string ArgumentValue(const std::vector<std::string>& args, const std::strin
   return *value;
 }
 
+std::vector<std::string> ArgumentValues(const std::vector<std::string>& args,
+                                        const std::string& name) {
+  std::vector<std::string> values;
+  for (auto found = args.begin(); found != args.end();) {
+    found = std::find(found, args.end(), name);
+    if (found == args.end()) break;
+    const auto value = std::next(found);
+    if (value == args.end() || value->rfind("--", 0) == 0)
+      throw Error("Missing value for " + name);
+    values.push_back(*value);
+    found = std::next(value);
+  }
+  return values;
+}
+
 bool HasArgument(const std::vector<std::string>& args, const std::string& name) {
   return std::find(args.begin(), args.end(), name) != args.end();
 }
@@ -94,6 +109,9 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
   options.manifest.devtools = HasArgument(args, "--devtools");
   options.manifest.backend_proxy.origin = ArgumentValue(args, "--backend-origin");
   options.manifest.backend_proxy.enabled = !options.manifest.backend_proxy.origin.empty();
+  options.manifest.ipc.enabled = HasArgument(args, "--ipc");
+  options.manifest.ipc.capabilities = ArgumentValues(args, "--ipc-capability");
+  options.manifest.ipc.filesystem_roots = ArgumentValues(args, "--ipc-root");
   options.manifest.logging.enabled = !HasArgument(args, "--no-log");
   options.manifest.logging.level = HasArgument(args, "--debug-log") ? "debug" : "info";
 
@@ -121,6 +139,7 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "             [--width 1280] [--height 800] [--app-id com.example.app]\n"
        << "             [--no-spa] [--windowed] [--no-log | --debug-log] [--devtools]\n"
        << "             [--backend-origin http://host:port]\n"
+       << "             [--ipc --ipc-capability app.info --ipc-root ${DOCUMENTS}]\n"
        << "             [--product-name App] [--file-description Description]\n"
        << "             [--icon app.png] [--company Company] [--version 1.0.0.0]\n"
        << "             [--copyright Copyright]\n"

@@ -67,6 +67,9 @@ void SetFullscreen(HWND window, RuntimeState& state, bool fullscreen) {
 LRESULT CALLBACK RuntimeProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   auto* state = reinterpret_cast<RuntimeState*>(GetWindowLongPtrW(window, GWLP_USERDATA));
   if (message == WM_SIZE && state && state->webview) state->webview->Resize();
+  if (state && state->webview &&
+      state->webview->HandleWindowMessage(message, wparam, lparam))
+    return 0;
   if (message == WM_DPICHANGED && state && !state->fullscreen) {
     const auto* suggested = reinterpret_cast<RECT*>(lparam);
     SetWindowPos(window, nullptr, suggested->left, suggested->top,
@@ -98,6 +101,7 @@ LRESULT CALLBACK RuntimeProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
 
 int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   std::wstring navigation;
+  std::string local_origin;
   auto state_owner = std::make_unique<RuntimeState>();
   auto* state = state_owner.get();
   try {
@@ -123,8 +127,10 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   if (payload.manifest.mode == AppMode::Local) {
     state->server = std::make_unique<ResourceServer>(payload, SecurityLimits{},
                                                      &state->logger);
-    navigation = Utf8ToWide(
-        BuildLocalStartUrl(state->server->Start(), payload.manifest.start_path));
+    auto base = state->server->Start();
+    local_origin = base;
+    while (!local_origin.empty() && local_origin.back() == '/') local_origin.pop_back();
+    navigation = Utf8ToWide(BuildLocalStartUrl(base, payload.manifest.start_path));
   } else {
     navigation = Utf8ToWide(payload.manifest.url);
   }
@@ -156,7 +162,7 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   state->webview = std::make_unique<WebViewHost>();
   try {
     state->webview->Create(
-        window, navigation, payload.manifest,
+        window, navigation, local_origin, payload.manifest,
         [window](const std::wstring& error) {
           MessageBoxW(window, error.c_str(), L"lw.Web2App", MB_OK | MB_ICONERROR);
           DestroyWindow(window);

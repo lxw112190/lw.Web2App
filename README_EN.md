@@ -39,6 +39,7 @@ Linux graphical packager (Ubuntu 22.04):
 - The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
 - True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
 - An optional controlled backend proxy forwards same-origin `/__lw_proxy__/...` requests to one fixed legacy HTTP origin from the Manifest, without disabling WebView security; Windows and Linux share the same implementation.
+- Optional Native IPC exposes app information, a system directory picker, and permission-scoped filesystem operations to trusted local pages through the stable `window.lw.invoke()` API; it is disabled by default and authorized per method.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
 - Limits for entry count, individual file size, and total uncompressed size.
 - PNG/ICO application icons and complete Windows PE version metadata.
@@ -287,6 +288,9 @@ Additional options:
 - `--entry`: select the real archived HTML, such as `login.html` or `pages/login.html`.
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
+- `--ipc`: enable Native IPC for a local package; URL mode cannot enable it.
+- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `fs.list`, `fs.move`, or `fs.delete`.
+- `--ipc-root`: repeat for each fixed filesystem root; `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`, `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}` are supported.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
 - `--no-log`: disable runtime logging in the generated application.
@@ -300,6 +304,33 @@ Additional options:
 - `--copyright`: write copyright metadata.
 
 A generated EXE can also execute CLI packaging commands. Only its original Runner prefix is copied, so old payloads are never nested.
+
+## Native IPC (experimental)
+
+Native IPC is intended only for trusted static pages packaged with the application. It does not expose arbitrary native functions. Access requires three independent gates: explicit Manifest enablement, a capability for every method, and fresh native-side path validation for every filesystem operation. Windows uses WebView2 WebMessage and Linux uses a dedicated WebKitGTK `lwIpc` ScriptMessageHandler, while pages use one API:
+
+```js
+const info = await window.lw.invoke("app.getInfo");
+// { appId, title, platform: "windows" | "linux", arch: "x64", version }
+```
+
+Package the [Native IPC example](examples/native-ipc/index.html):
+
+```powershell
+lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
+  --title "Native IPC Example" --windowed --ipc `
+  --ipc-capability app.info `
+  --ipc-capability dialog.directory `
+  --ipc-capability fs.list `
+  --ipc-capability fs.move `
+  --ipc-capability fs.delete
+```
+
+The example first invokes `dialog.selectDirectory`. A directory selected through the system dialog becomes a session-only grant and is forgotten when the app exits. The page may then invoke `fs.list`, `fs.move`, and `fs.delete` within that grant. Fixed roots can instead be embedded with repeatable `--ipc-root` options.
+
+The JSON protocol is `lw-ipc-v1`. Messages are capped at 1 MiB, IDs and method names at 128 bytes, and each page may have at most 64 pending requests; duplicate IDs return `BUSY`. Stable error codes are `INVALID_REQUEST`, `INVALID_ARGUMENT`, `METHOD_NOT_FOUND`, `PERMISSION_DENIED`, `USER_CANCELLED`, `NOT_FOUND`, `ALREADY_EXISTS`, `IO_ERROR`, `UNSUPPORTED`, `BUSY`, and `INTERNAL_ERROR`.
+
+With IPC enabled, the Runtime accepts messages only from the exact current `127.0.0.1` application-port origin and blocks top-level navigation to external origins. The Linux transport also requires a random per-process session token so a cross-origin iframe cannot bypass the top-level restriction. URL mode cannot enable IPC. Filesystem paths must be absolute local paths; existing paths are canonicalized, new targets are validated through their canonical parent, and both source and destination must remain under a fixed Manifest root or session grant. Windows device paths, UNC paths, and ADS are rejected, and symbolic links/reparse points cannot escape a granted root. INFO logs record method names, result codes, and security rejections, but never method parameters or user paths.
 
 ## Payload V2 Format
 
@@ -330,6 +361,7 @@ This project packages trusted static web applications. It is not a sandbox for h
 - Maximum manifest size: 1 MiB.
 - The HTTP service listens only on IPv4 loopback and requires the exact per-app port Host value.
 - The backend proxy accepts only the fixed Manifest `http://` origin; arbitrary URLs, cross-site callers, cross-host redirects, and ZIP resources that collide with its prefix are rejected, with explicit size and timeout limits.
+- Native IPC is disabled by default and local-mode only; capabilities, exact origin, fixed roots, and session grants are enforced natively.
 - SHA-256 detects corruption or modification but does not authenticate a publisher. Digital signatures are planned separately.
 
 ## Project Layout
@@ -341,6 +373,7 @@ src/linux/     Linux GTK3 GUI, WebKitGTK Runtime, and entry point
 src/webview/   WebView2 host
 src/packer/    Manifest, payload, and packer
 src/runtime/   ZIP resource access, LRU cache, local HTTP server, and controlled backend proxy
+src/ipc/       Cross-platform IPC protocol, capabilities, path permissions, and dispatch
 src/pe/        Icon and version resource updates
 src/common/    File, path, and SHA-256 utilities
 tests/         Unit and packaging/resource integration tests

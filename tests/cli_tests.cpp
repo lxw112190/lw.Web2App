@@ -57,6 +57,16 @@ void RunCliTests() {
             "http://192.0.2.10:8080",
         "backend proxy origin parsed");
 
+  const auto ipc_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
+       "--ipc", "--ipc-capability", "app.info", "--ipc-capability", "fs.list",
+       "--ipc-root", "${DOCUMENTS}"},
+      "runner.exe");
+  Check(ipc_command.pack.manifest.ipc.enabled &&
+            ipc_command.pack.manifest.ipc.capabilities.size() == 2 &&
+            ipc_command.pack.manifest.ipc.filesystem_roots.size() == 1,
+        "repeatable Native IPC options parsed");
+
   const std::vector<std::string> local_args = {
       "lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
       "--start-path", "/login"};
@@ -101,6 +111,9 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--backend-origin") !=
             std::string::npos,
         "help includes controlled backend proxy option");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--ipc-capability") !=
+            std::string::npos,
+        "help includes Native IPC capability option");
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--product-name") !=
             std::string::npos,
         "help includes PE product name option");

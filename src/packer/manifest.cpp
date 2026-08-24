@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 namespace lwweb {
 
@@ -43,6 +44,26 @@ void ValidateManifest(const Manifest& manifest) {
     if (!IsSafeStartPath(manifest.start_path)) throw Error("Unsafe manifest start path");
   } else if (!IsSupportedHttpUrl(manifest.url)) {
     throw Error("URL mode requires an http:// or https:// URL");
+  }
+  if (manifest.ipc.enabled && manifest.mode != AppMode::Local)
+    throw Error("Native IPC is available only for local packaged sites");
+  if (!manifest.ipc.enabled &&
+      (!manifest.ipc.capabilities.empty() || !manifest.ipc.filesystem_roots.empty()))
+    throw Error("Native IPC capabilities require ipc.enabled=true");
+  static const std::set<std::string> supported_capabilities = {
+      "app.info", "dialog.directory", "fs.list", "fs.move", "fs.delete"};
+  std::set<std::string> unique_capabilities;
+  for (const auto& capability : manifest.ipc.capabilities) {
+    if (!supported_capabilities.count(capability))
+      throw Error("Unsupported Native IPC capability: " + capability);
+    if (!unique_capabilities.insert(capability).second)
+      throw Error("Duplicate Native IPC capability: " + capability);
+  }
+  if (manifest.ipc.filesystem_roots.size() > 32)
+    throw Error("Native IPC filesystem root count exceeds the safety limit");
+  for (const auto& root : manifest.ipc.filesystem_roots) {
+    if (root.empty() || root.size() > 4096 || root.find('\0') != std::string::npos)
+      throw Error("Native IPC filesystem root is invalid");
   }
   const auto& proxy = manifest.backend_proxy;
   if (proxy.enabled) {
@@ -103,7 +124,10 @@ std::string SerializeManifest(const Manifest& manifest, bool pretty) {
         {"connect_timeout_ms", manifest.backend_proxy.connect_timeout_ms},
         {"read_timeout_ms", manifest.backend_proxy.read_timeout_ms},
         {"max_request_size", manifest.backend_proxy.max_request_size},
-        {"max_response_size", manifest.backend_proxy.max_response_size}}}};
+        {"max_response_size", manifest.backend_proxy.max_response_size}}},
+      {"ipc", {{"enabled", manifest.ipc.enabled},
+               {"capabilities", manifest.ipc.capabilities},
+               {"filesystem_roots", manifest.ipc.filesystem_roots}}}};
   if (!manifest.legacy_payload_sha256.empty())
     value["payload_sha256"] = manifest.legacy_payload_sha256;
   if (manifest.mode == AppMode::Url) value["url"] = manifest.url;
@@ -149,6 +173,13 @@ Manifest ParseManifest(const std::string& json) {
       manifest.logging.max_files = logging->value("max_files", 5u);
     } else {
       manifest.logging.enabled = false;
+    }
+    if (const auto ipc = value.find("ipc"); ipc != value.end()) {
+      manifest.ipc.enabled = ipc->value("enabled", false);
+      manifest.ipc.capabilities =
+          ipc->value("capabilities", std::vector<std::string>{});
+      manifest.ipc.filesystem_roots =
+          ipc->value("filesystem_roots", std::vector<std::string>{});
     }
     manifest.legacy_payload_sha256 = value.value("payload_sha256", "");
     ValidateManifest(manifest);

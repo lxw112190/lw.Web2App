@@ -100,6 +100,28 @@ jobs:
           Copy-Item integration/wechat-article-formatter/LICENSE `
             dist/lw.Web2App/examples/wechat-article-formatter-LICENSE.txt
 
+      - name: Package and inspect Native IPC example
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $packer = (Resolve-Path 'build/Release/lw.Web2App.exe').Path
+          $output = Join-Path $PWD 'dist/lw.Web2App/examples/native-ipc.exe'
+          & $packer pack examples/native-ipc $output --title 'Native IPC 示例' `
+            --windowed --ipc `
+            --ipc-capability app.info `
+            --ipc-capability dialog.directory `
+            --ipc-capability fs.list `
+            --ipc-capability fs.move `
+            --ipc-capability fs.delete
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $output)) {
+            throw "Native IPC example packaging failed"
+          }
+          $inspect = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
+            -ArgumentList @('inspect', $output)
+          if ($inspect.ExitCode -ne 0) {
+            throw "Native IPC example inspection failed"
+          }
+
       - name: Prepare distribution
         shell: pwsh
         run: |
@@ -114,7 +136,8 @@ jobs:
           Copy-Item third_party/licenses/* dist/lw.Web2App/third_party/licenses/
           $checksums = @(
             'dist/lw.Web2App/lw.Web2App.exe',
-            'dist/lw.Web2App/examples/wechat-article-formatter.exe'
+            'dist/lw.Web2App/examples/wechat-article-formatter.exe',
+            'dist/lw.Web2App/examples/native-ipc.exe'
           ) | ForEach-Object {
             $hash = Get-FileHash $_ -Algorithm SHA256
             $root = (Resolve-Path 'dist/lw.Web2App').Path
@@ -218,6 +241,20 @@ jobs:
           grep -q "Navigation completed" "$runtime_log"
           cp integration/wechat-article-formatter/LICENSE \
             dist/lw.Web2App/examples/wechat-article-formatter-LICENSE.txt
+          ./build/lw.Web2App pack examples/native-ipc \
+            dist/lw.Web2App/examples/native-ipc \
+            --title "Native IPC 示例" --windowed --ipc \
+            --ipc-capability app.info \
+            --ipc-capability dialog.directory \
+            --ipc-capability fs.list \
+            --ipc-capability fs.move \
+            --ipc-capability fs.delete
+          ./build/lw.Web2App inspect dist/lw.Web2App/examples/native-ipc \
+            > dist/lw.Web2App/examples/native-ipc-manifest.json
+          grep -q '"enabled": true' \
+            dist/lw.Web2App/examples/native-ipc-manifest.json
+          grep -q '"app.info"' \
+            dist/lw.Web2App/examples/native-ipc-manifest.json
 
       - name: Prepare Linux distributions
         run: |
@@ -238,6 +275,7 @@ jobs:
             dist/packages/*.tar.gz \
             dist/lw.Web2App/lw.Web2App \
             dist/lw.Web2App/examples/wechat-article-formatter \
+            dist/lw.Web2App/examples/native-ipc \
             > "dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt"
 
       - name: Upload downloadable artifact

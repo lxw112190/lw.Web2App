@@ -39,6 +39,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
 - Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
 - 可选的受控后台代理把 `/__lw_proxy__/...` 同源请求转发到 Manifest 固定的传统 HTTP Origin，不需要关闭 WebView 安全策略，Windows 与 Linux 共用同一实现。
+- 可选 Native IPC 通过稳定的 `window.lw.invoke()` API 为可信本地页面提供应用信息、系统目录选择和受权限约束的文件操作；默认关闭且按方法授权。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
 - 拒绝绝对路径、盘符、`..`、NUL、重复 ZIP 路径。
 - 限制资源数量、单文件大小和总解压大小，降低 ZIP 炸弹风险。
@@ -294,6 +295,9 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--entry`：指定归档内真实入口 HTML，例如 `login.html` 或 `pages/login.html`。
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
+- `--ipc`：为本地打包模式启用 Native IPC；在线 URL 模式禁止启用。
+- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`fs.list`、`fs.move`、`fs.delete`。
+- `--ipc-root`：重复传入文件系统固定根目录；支持 `${HOME}`、`${DESKTOP}`、`${DOCUMENTS}`、`${PICTURES}`、`${DOWNLOADS}`、`${APP_DATA}`、`${APP_CACHE}`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
 - `--no-log`：关闭生成应用的运行日志。
@@ -307,6 +311,44 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--copyright`：写入版权信息。
 
 已经生成的 EXE 也可继续执行 CLI 打包命令。程序只会复制原始 Runner 前缀，不会嵌套旧 Payload。
+
+## Native IPC（实验性）
+
+Native IPC 只面向打包进应用的可信静态页面。它不会给页面暴露任意 Native 函数，而是采用“Manifest 明确启用 → 每个方法单独声明 Capability → 每次文件操作重新校验路径”的三层限制。Windows 使用 WebView2 WebMessage，Linux 使用 WebKitGTK 独立的 `lwIpc` ScriptMessageHandler；网页端统一使用：
+
+```js
+const info = await window.lw.invoke("app.getInfo");
+// { appId, title, platform: "windows" | "linux", arch: "x64", version }
+```
+
+打包 [Native IPC 示例](examples/native-ipc/index.html)：
+
+```powershell
+lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
+  --title "Native IPC 示例" --windowed --ipc `
+  --ipc-capability app.info `
+  --ipc-capability dialog.directory `
+  --ipc-capability fs.list `
+  --ipc-capability fs.move `
+  --ipc-capability fs.delete
+```
+
+示例先调用 `dialog.selectDirectory`。用户通过系统窗口选择的目录会成为仅本次进程有效的 Session Grant，应用退出后自动失效；随后可以调用：
+
+```js
+const selected = await lw.invoke("dialog.selectDirectory");
+const listing = await lw.invoke("fs.list", { path: selected.path });
+await lw.invoke("fs.move", {
+  from: selected.path + "/before.txt",
+  to: selected.path + "/after.txt",
+  overwrite: false
+});
+await lw.invoke("fs.delete", { path: selected.path + "/after.txt" });
+```
+
+协议版本为 `lw-ipc-v1`，请求和响应使用 JSON。消息最大 1 MiB，ID/方法名最大 128 字节，同一页面最多保留 64 个待处理请求，重复 ID 返回 `BUSY`。错误码稳定为 `INVALID_REQUEST`、`INVALID_ARGUMENT`、`METHOD_NOT_FOUND`、`PERMISSION_DENIED`、`USER_CANCELLED`、`NOT_FOUND`、`ALREADY_EXISTS`、`IO_ERROR`、`UNSUPPORTED`、`BUSY` 和 `INTERNAL_ERROR`。
+
+启用 IPC 时，Runtime 只接受来自当前 `127.0.0.1` 应用端口精确 Origin 的消息，并阻止顶层页面跳转到外部 Origin；Linux 传输还要求进程启动时生成的随机会话令牌，避免跨源 iframe 绕过顶层页面限制；URL 模式不能启用 IPC。文件路径必须是绝对本地路径，现有路径按真实路径规范化，新路径按真实父目录规范化，源和目标都必须位于 Manifest 固定根目录或 Session Grant 内。Windows 设备路径、UNC 路径和 ADS 被拒绝，符号链接/重解析点不能用于逃逸授权根目录。默认 INFO 日志只记录 IPC 方法名、结果错误码及安全拒绝事件，不记录方法参数和用户本地路径。
 
 ## Payload V2 格式
 
@@ -337,6 +379,7 @@ Footer             固定 80 字节
 - Manifest 最大 1 MiB。
 - HTTP 服务仅绑定 IPv4 loopback，且必须提供精确的应用专属端口 Host。
 - 后台代理只接受 Manifest 固定的 `http://` Origin；拒绝任意 URL、跨站来源、跨 Host 重定向和与代理前缀冲突的 ZIP 资源，并限制请求/响应大小与超时。
+- Native IPC 默认关闭，只支持本地打包模式；Capability、精确 Origin、固定根目录和临时目录授权会在 Native 侧强制执行。
 - SHA-256 可以检测损坏或修改，但不能验证发布者身份；数字签名属于后续规划。
 
 ## 项目结构
@@ -348,6 +391,7 @@ src/linux/     Linux GTK3 GUI、WebKitGTK Runtime 和程序入口
 src/webview/   WebView2 宿主
 src/packer/    Manifest、Payload 和打包器
 src/runtime/   ZIP 资源读取、LRU、本地 HTTP 服务和受控后台代理
+src/ipc/       跨平台 IPC 协议、Capability、路径权限和方法调度
 src/pe/        图标和版本资源更新
 src/common/    文件、路径和 SHA-256 工具
 tests/         单元测试与打包/读取集成测试
@@ -360,7 +404,7 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 1. Windows 2022 使用 VS2022 构建和测试 Windows x64。
 2. Ubuntu 22.04、24.04 使用 Ninja、GTK3、WebKitGTK 4.1 和 OpenSSL 构建并测试 Linux x64。
 3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
-4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256。
+4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
 5. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
 6. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact。
 7. 对 `v*` 标签汇总所有平台产物到 GitHub Release。

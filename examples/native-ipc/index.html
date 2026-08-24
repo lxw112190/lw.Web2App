@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>lw.Web2App Native IPC 示例</title>
+  <style>
+    body{font-family:system-ui,sans-serif;max-width:860px;margin:48px auto;padding:0 24px;color:#172033}
+    button{margin:4px;padding:9px 15px;border:0;border-radius:8px;background:#2563eb;color:#fff;cursor:pointer}
+    pre{min-height:120px;padding:16px;border-radius:10px;background:#f1f5f9;white-space:pre-wrap}
+    .note{color:#64748b}
+  </style>
+</head>
+<body>
+  <h1>Native IPC 权限示例</h1>
+  <p class="note">先通过系统窗口选择目录；授权仅在本次应用运行期间有效。</p>
+  <button id="select">选择并授权目录</button>
+  <button id="list" disabled>列出目录</button>
+  <pre id="output">正在读取应用信息…</pre>
+  <script>
+    const output=document.querySelector('#output');
+    const show=value=>output.textContent=JSON.stringify(value,null,2);
+    let directory='';
+    async function invoke(method,params){
+      try{return await window.lw.invoke(method,params)}
+      catch(error){show({code:error.code,message:error.message});throw error}
+    }
+    invoke('app.getInfo').then(show);
+    document.querySelector('#select').onclick=async()=>{
+      const result=await invoke('dialog.selectDirectory');
+      directory=result.path;document.querySelector('#list').disabled=false;show(result);
+    };
+    document.querySelector('#list').onclick=()=>invoke('fs.list',{path:directory}).then(show);
+  </script>
+</body>
+</html>

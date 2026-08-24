@@ -4,6 +4,8 @@
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/sha256.h"
+#include "lwweb/ipc/ipc_dispatcher.h"
+#include "lwweb/version.h"
 
 #include <ShlObj.h>
 #include <ShObjIdl.h>
@@ -11,6 +13,7 @@
 #include <filesystem>
 #include <iterator>
 #include <optional>
+#include <thread>
 
 using Microsoft::WRL::Callback;
 
@@ -85,22 +88,72 @@ std::optional<std::wstring> ChooseDownloadPath(HWND owner,
   return selected;
 }
 
+std::optional<std::filesystem::path> ChooseDirectory(HWND owner) {
+  Microsoft::WRL::ComPtr<IFileOpenDialog> dialog;
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+                              IID_PPV_ARGS(&dialog))))
+    throw IpcException("UNSUPPORTED", "System directory dialog is unavailable");
+  FILEOPENDIALOGOPTIONS options{};
+  if (SUCCEEDED(dialog->GetOptions(&options)))
+    dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM |
+                       FOS_PATHMUSTEXIST | FOS_NOCHANGEDIR);
+  dialog->SetTitle(L"选择授权目录");
+  const auto shown = dialog->Show(owner);
+  if (shown == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return std::nullopt;
+  if (FAILED(shown))
+    throw IpcException("IO_ERROR", "System directory dialog failed");
+  Microsoft::WRL::ComPtr<IShellItem> result;
+  if (FAILED(dialog->GetResult(&result)))
+    throw IpcException("IO_ERROR", "Cannot read selected directory");
+  PWSTR path = nullptr;
+  if (FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) || !path)
+    throw IpcException("IO_ERROR", "Selected item is not a filesystem directory");
+  std::filesystem::path selected(path);
+  CoTaskMemFree(path);
+  return selected;
+}
+
+struct PendingIpcResponse {
+  std::shared_ptr<IpcDispatcher> dispatcher;
+  std::string method;
+  IpcResponse response;
+};
+
+void LogIpcResult(const Logger* logger, const std::string& method,
+                  const IpcResponse& response) {
+  if (!logger) return;
+  if (response.ok)
+    logger->Info("IPC result: " + method + " OK");
+  else
+    logger->Warn("IPC failed: " + method + " - " + response.error.code);
+}
+
 }  // namespace
 
 WebViewHost::~WebViewHost() {
   if (controller_) controller_->Close();
 }
 
-void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& manifest,
+void WebViewHost::Create(HWND window, const std::wstring& url,
+                         const std::string& local_origin, const Manifest& manifest,
                          std::function<void(const std::wstring&)> on_error,
                          std::function<void(bool)> on_fullscreen_changed,
                          const Logger* logger) {
   window_ = window;
   url_ = url;
+  local_origin_ = local_origin;
   manifest_ = manifest;
   on_error_ = std::move(on_error);
   on_fullscreen_changed_ = std::move(on_fullscreen_changed);
   logger_ = logger;
+  if (manifest_.ipc.enabled) {
+    IpcRuntimeServices services;
+    services.platform = "windows";
+    services.runtime_version = kVersion;
+    services.select_directory = [this] { return ChooseDirectory(window_); };
+    ipc_dispatcher_ =
+        std::make_shared<IpcDispatcher>(manifest_, std::move(services));
+  }
   user_data_folder_ = UserDataFolder(manifest_);
   const HRESULT started = CreateCoreWebView2EnvironmentWithOptions(
       nullptr, user_data_folder_.c_str(), nullptr,
@@ -285,6 +338,29 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                          return S_OK;
                                        }).Get(),
                                    &navigation_token);
+                               if (ipc_dispatcher_) {
+                                 EventRegistrationToken starting_token{};
+                                 webview_->add_NavigationStarting(
+                                     Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                         [this](ICoreWebView2*,
+                                                ICoreWebView2NavigationStartingEventArgs* args)
+                                             -> HRESULT {
+                                           LPWSTR uri = nullptr;
+                                           if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
+                                             const auto allowed = IsAllowedIpcSource(
+                                                 WideToUtf8(uri), local_origin_);
+                                             CoTaskMemFree(uri);
+                                             if (!allowed) {
+                                               args->put_Cancel(TRUE);
+                                               if (logger_)
+                                                 logger_->Warn(
+                                                     "Blocked external navigation while Native IPC is enabled");
+                                             }
+                                           }
+                                           return S_OK;
+                                         }).Get(),
+                                     &starting_token);
+                               }
                                EventRegistrationToken message_token{};
                                webview_->add_WebMessageReceived(
                                    Callback<ICoreWebView2WebMessageReceivedEventHandler>(
@@ -301,6 +377,71 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                              logger_->Error("[WEB-ERROR] " +
                                                             WideToUtf8(text.substr(
                                                                 std::size(prefix) - 1)));
+                                           return S_OK;
+                                         }
+                                         if (!ipc_dispatcher_) return S_OK;
+                                         LPWSTR source = nullptr;
+                                         if (FAILED(args->get_Source(&source)) || !source)
+                                           return S_OK;
+                                         const bool allowed = IsAllowedIpcSource(
+                                             WideToUtf8(source), local_origin_);
+                                         CoTaskMemFree(source);
+                                         if (!allowed) {
+                                           if (logger_)
+                                             logger_->Warn("Rejected Native IPC message from an untrusted origin");
+                                           return S_OK;
+                                         }
+                                         LPWSTR json = nullptr;
+                                         if (FAILED(args->get_WebMessageAsJson(&json)) || !json)
+                                           return S_OK;
+                                         const auto text = WideToUtf8(json);
+                                         CoTaskMemFree(json);
+                                         IpcRequest request;
+                                         try {
+                                           request = ParseIpcRequest(text);
+                                         } catch (const IpcException& error) {
+                                           const auto response = SerializeIpcResponse(
+                                               MakeIpcError("", error.Code(), error.what()));
+                                           webview_->PostWebMessageAsJson(
+                                               Utf8ToWide(response).c_str());
+                                           return S_OK;
+                                         }
+                                         if (!ipc_dispatcher_->TryBegin(request.id)) {
+                                           const auto response = SerializeIpcResponse(
+                                               MakeIpcError(request.id, "BUSY",
+                                                            "Duplicate or excessive pending request"));
+                                           webview_->PostWebMessageAsJson(
+                                               Utf8ToWide(response).c_str());
+                                           return S_OK;
+                                         }
+                                         if (logger_)
+                                           logger_->Info("IPC request: " + request.method);
+                                         if (ipc_dispatcher_->ExecutionFor(request.method) ==
+                                             IpcExecution::Worker) {
+                                           const auto dispatcher = ipc_dispatcher_;
+                                           const auto target = window_;
+                                           std::thread([dispatcher, target,
+                                                        request = std::move(request)]() mutable {
+                                             auto pending = std::make_unique<PendingIpcResponse>();
+                                             pending->dispatcher = dispatcher;
+                                             pending->method = request.method;
+                                             pending->response = dispatcher->Dispatch(request);
+                                             if (!PostMessageW(target,
+                                                               kWebViewIpcResponseMessage, 0,
+                                                               reinterpret_cast<LPARAM>(
+                                                                   pending.get()))) {
+                                               dispatcher->End(request.id);
+                                               return;
+                                             }
+                                             pending.release();
+                                           }).detach();
+                                         } else {
+                                           const auto response =
+                                               ipc_dispatcher_->Dispatch(request);
+                                           ipc_dispatcher_->End(request.id);
+                                           LogIpcResult(logger_, request.method, response);
+                                           webview_->PostWebMessageAsJson(
+                                               Utf8ToWide(SerializeIpcResponse(response)).c_str());
                                          }
                                          return S_OK;
                                        }).Get(),
@@ -308,6 +449,13 @@ void WebViewHost::Create(HWND window, const std::wstring& url, const Manifest& m
                                webview_->AddScriptToExecuteOnDocumentCreated(
                                    LR"JS((()=>{const p='__lw_web_error__';const s=v=>{try{return typeof v==='string'?v:JSON.stringify(v)}catch(_){return String(v)}};const e=console.error.bind(console);console.error=(...a)=>{e(...a);chrome.webview.postMessage(p+a.map(s).join(' '))};addEventListener('error',x=>chrome.webview.postMessage(p+(x.message||'Uncaught error')+(x.filename?' at '+x.filename+':'+x.lineno:'')));addEventListener('unhandledrejection',x=>chrome.webview.postMessage(p+'Unhandled rejection: '+s(x.reason)))})())JS",
                                    nullptr);
+                               if (ipc_dispatcher_) {
+                                 const auto bridge = Utf8ToWide(
+                                     BuildIpcBridgeScript("windows", "windows"));
+                                 webview_->AddScriptToExecuteOnDocumentCreated(
+                                     bridge.c_str(), nullptr);
+                                 if (logger_) logger_->Info("Native IPC bridge enabled");
+                               }
                                Microsoft::WRL::ComPtr<ICoreWebView2Settings> settings;
                                if (SUCCEEDED(webview_->get_Settings(&settings))) {
                                  settings->put_AreDevToolsEnabled(manifest_.devtools);
@@ -335,6 +483,20 @@ void WebViewHost::Resize() {
   RECT bounds{};
   GetClientRect(window_, &bounds);
   controller_->put_Bounds(bounds);
+}
+
+bool WebViewHost::HandleWindowMessage(UINT message, WPARAM, LPARAM lparam) {
+  if (message != kWebViewIpcResponseMessage) return false;
+  std::unique_ptr<PendingIpcResponse> pending(
+      reinterpret_cast<PendingIpcResponse*>(lparam));
+  if (!pending) return true;
+  pending->dispatcher->End(pending->response.id);
+  LogIpcResult(logger_, pending->method, pending->response);
+  if (webview_) {
+    const auto json = Utf8ToWide(SerializeIpcResponse(pending->response));
+    webview_->PostWebMessageAsJson(json.c_str());
+  }
+  return true;
 }
 
 }  // namespace lwweb
