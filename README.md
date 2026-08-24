@@ -528,13 +528,12 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 2. Ubuntu 22.04、24.04 使用 Ninja、GTK3、WebKitGTK 4.1 和 OpenSSL 构建并测试 Linux x64。
 3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
 4. Windows 与 Ubuntu 都执行 `publish` 冒烟测试，并校验 ZIP/tar.gz、`SHA256SUMS.txt` 和 `RELEASE_INFO.json`。
-5. Windows CI 使用真实 Inno Setup 生成 Installer，并验证 Portable 与 Setup 的 Authenticode 签名。
+5. Windows CI 使用真实 Inno Setup 生成 Installer。
 6. Ubuntu CI 为生成应用构建真实 DEB，并用 `dpkg-deb --info/--contents` 校验依赖、ELF、desktop 与图标。
 7. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置，并对本地文件桥执行完整读取、HEAD、单 Range、错误 Token、路径穿越、只读方法和撤销测试。
 8. Windows 真实启动生成的测试 EXE，在 WebView2 页面调用 `app.getInfo`，并从 Runtime 日志校验初始化、导航、IPC 请求和响应；失败时上传诊断日志。
-9. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
-10. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
-11. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
+9. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
+10. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
 
 ## 第三方依赖
 

@@ -528,12 +528,11 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 3. Builds the `wechat-article-formatter` Vite bundle in all platform jobs.
 4. Generates a Windows EXE or Linux ELF, validates its payload with `inspect`, and tests complete, HEAD, single-range, invalid-token, traversal, read-only-method, and revoke behavior for the Local File Bridge.
 5. Runs `publish` smoke tests on Windows and Ubuntu and validates the ZIP/tar.gz, `SHA256SUMS.txt`, and `RELEASE_INFO.json`.
-6. Builds an Installer with real Inno Setup on Windows CI and verifies Authenticode on both the Portable EXE and Setup EXE.
+6. Builds an Installer with real Inno Setup on Windows CI.
 7. Builds a real generated-app DEB on Ubuntu and checks its dependencies, ELF, desktop entry, and icon with `dpkg-deb --info/--contents`.
 8. Launches a generated Windows EXE, invokes `app.getInfo` from its WebView2 page, validates initialization, navigation, IPC request/response markers in the Runtime log, and uploads diagnostics on failure.
-9. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
-10. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
-11. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
+9. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
+10. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
 
 ## Dependencies
 
