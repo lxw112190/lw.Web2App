@@ -148,6 +148,39 @@ void RunPublisherTests() {
   Check(valid_tar && stored_crc == actual_crc,
         "Linux tar.gz has a valid USTAR header and GZip CRC");
 
+#ifndef _WIN32
+  auto deb_config = nlohmann::json::parse(lwweb::ReadFileText(config));
+  deb_config["publish"]["linux"]["tar_gz"] = false;
+  deb_config["publish"]["linux"]["deb"] = true;
+  WriteText(config, deb_config.dump(2));
+  auto deb_options = linux_options;
+  deb_options.output_override = root / "deb-release";
+  const auto deb_result = lwweb::PublishProject(deb_options);
+  const auto deb = deb_result.directory / "publish-test_1.2.3_amd64.deb";
+  const auto deb_bytes = lwweb::ReadFileBytes(deb);
+  Check(deb_bytes.size() > 8 &&
+            std::memcmp(deb_bytes.data(), "!<arch>\n", 8) == 0 &&
+            deb_result.release.artifacts.size() == 2 &&
+            deb_result.release.artifacts[0].type == "portable" &&
+            deb_result.release.artifacts[1].type == "deb" &&
+            deb_result.release.artifacts[1].sha256 == Digest(deb),
+        "Linux publish builds, validates, and records a generated-app DEB");
+  WriteText(deb_result.directory / "deb-release.marker",
+            "preserve on DEB failure");
+  deb_config["app"]["icon"] = "./missing-icon.png";
+  WriteText(config, deb_config.dump(2));
+  bool deb_failed = false;
+  try {
+    (void)lwweb::PublishProject(deb_options);
+  } catch (...) {
+    deb_failed = true;
+  }
+  Check(deb_failed &&
+            lwweb::ReadFileText(deb_result.directory / "deb-release.marker") ==
+                "preserve on DEB failure",
+        "DEB failure preserves the previous complete release");
+#endif
+
 #ifdef _WIN32
   auto installer_config = nlohmann::json::parse(lwweb::ReadFileText(config));
   installer_config["publish"]["windows"]["zip"] = false;

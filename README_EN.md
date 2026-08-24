@@ -12,7 +12,7 @@ Windows graphical packager:
 
 <img src="docs/assets/lw.Web2App.png" alt="lw.Web2App graphical packager on Windows" width="760">
 
-The Windows GUI uses a two-column layout. The left side selects a local build or URL, entry page, start path, and controlled backend proxy. The right side configures the window title, PE ProductName, FileDescription, company, version, copyright, live icon preview, dimensions, and runtime options. The title continues to synchronize into ProductName and FileDescription until either field is edited manually. Output and progress share a full-width bottom area, while resource compression remains on a worker thread so large projects do not freeze the UI. After a successful package, File Explorer opens automatically with the generated EXE selected.
+The Windows GUI uses a two-column layout. The left side selects a local build or URL, entry page, start path, and controlled backend proxy. The right side configures the window title, PE ProductName, FileDescription, company, version, copyright, live icon preview, dimensions, and runtime options. The title continues to synchronize into ProductName and FileDescription until either field is edited manually. Output and progress share a full-width bottom area; the default is `out\MyWebApp.exe` beside the packer, and `out` is created on the first build. Resource compression remains on a worker thread so large projects do not freeze the UI. After a successful package, File Explorer opens automatically with the generated EXE selected.
 
 Versions may contain one to four numeric components and are normalized to `a.b.c.d`; every component must be within `0..65535`. PNG and ICO files are previewed immediately and validated before packaging; common PNG images larger than 256 pixels are proportionally resized, and the built-in icon can be restored at any time. Both the sponsor QR image and application icon are embedded in the GUI executable and do not depend on sidecar files.
 
@@ -169,7 +169,7 @@ The artifact contains:
 
 Pushing a `v*` tag also creates a GitHub Release containing the ZIP distribution and its SHA-256 checksum file.
 
-Linux artifacts include a lw.Web2App `.deb`, a portable `.tar.gz`, the generated single-file `examples/wechat-article-formatter`, and SHA-256 files. The DEB installs desktop-menu metadata and declares GTK/WebKitGTK dependencies; the portable package and generated apps still require those libraries on the target Ubuntu system.
+Linux artifacts include a lw.Web2App `.deb`, a portable `.tar.gz`, the generated single-file `examples/wechat-article-formatter`, an application-specific Native IPC example DEB, and SHA-256 files. DEBs install desktop-menu metadata and declare GTK/WebKitGTK dependencies; portable packages and generated apps still require those libraries on the target Ubuntu system.
 
 ### CI Integration-Test Project
 
@@ -275,7 +275,7 @@ The repository has a strict `schema: 1` project model consumed as the single inp
       "installer": { "enabled": false },
       "signing": { "enabled": false }
     },
-    "linux": { "tar_gz": true, "deb": false }
+    "linux": { "tar_gz": true, "deb": true }
   }
 }
 ```
@@ -292,7 +292,7 @@ lw.Web2App.exe publish
 lw.Web2App.exe publish --config .\config\lwweb.json --output .\release
 ```
 
-Windows produces a portable EXE and ZIP by default, with a Setup EXE added when the Installer is enabled. Ubuntu produces an executable and `tar.gz`. Every version gets an isolated directory plus `SHA256SUMS.txt` and a machine-readable `RELEASE_INFO.json`:
+Windows produces a portable EXE and ZIP by default, with a Setup EXE added when the Installer is enabled. Ubuntu produces an executable and `tar.gz`, plus an application-specific DEB when `publish.linux.deb` is enabled. Every version gets an isolated directory plus `SHA256SUMS.txt` and a machine-readable `RELEASE_INFO.json`:
 
 ```text
 release/
@@ -304,9 +304,23 @@ release/
     └── RELEASE_INFO.json
 ```
 
-Publishing completes packaging, Installer creation, compression, and SHA-256 generation in a hidden staging directory under the output root, then replaces the same-version directory only after every stage succeeds. A failure removes incomplete files and preserves the previous release. `publish.output` in the project file is relative to that file, while an explicit CLI `--output` is relative to the current working directory. Application-specific DEBs are not generated in this stage; enabling `publish.linux.deb` therefore reports a clear error instead of silently omitting an artifact.
+An Ubuntu release looks like this:
+
+```text
+release/
+└── MyApp-1.2.0-linux-x64/
+    ├── MyApp
+    ├── myapp_1.2.0_amd64.deb
+    ├── MyApp-1.2.0-linux-x64.tar.gz
+    ├── SHA256SUMS.txt
+    └── RELEASE_INFO.json
+```
+
+Publishing completes packaging, Installer or DEB creation, compression, and SHA-256 generation in a hidden staging directory under the output root, then replaces the same-version directory only after every stage succeeds. A failure removes incomplete files and preserves the previous release. `publish.output` in the project file is relative to that file, while an explicit CLI `--output` is relative to the current working directory.
 
 Windows Installers are built with [Inno Setup 6.3 or newer](https://jrsoftware.org/isinfo.php). When `publish.windows.installer.enabled` is true, lw.Web2App searches for `ISCC.exe` in `installer.iscc`, `PATH`, and common Inno Setup installation directories, in that order. A missing compiler is a hard error. The stable `app.id` becomes the upgrade identity; the default destination is `{autopf}\AppName`, with an uninstall entry, a configurable Start Menu shortcut, and an initially unchecked desktop-shortcut task. With Authenticode enabled, the portable application is signed before being embedded, then the Setup EXE is signed separately, so both final executables carry publisher trust.
+
+Generated Linux DEBs run the system `dpkg-shlibdeps` against the final ELF, so GTK/WebKitGTK dependencies follow the actual Ubuntu 22.04 or 24.04 build environment instead of hard-coded package names. `dpkg-deb` then installs the executable under `/usr/bin/<last app.id segment>`, a desktop entry under `/usr/share/applications`, and a configured PNG/SVG icon under the hicolor theme; an embedded default SVG is used when no icon is configured. The build host must provide `dpkg-dev`. Missing tools, dependency-analysis errors, or invalid DEB output fail the atomic publication. This first stage is `amd64` only and does not produce ARM64, RPM, AppImage, Flatpak, or Snap packages.
 
 ## CLI
 
@@ -506,9 +520,10 @@ The workflow at [.github/workflows/build.yml](.github/workflows/build.yml):
 4. Generates a Windows EXE or Linux ELF and validates its payload with `inspect`.
 5. Runs `publish` smoke tests on Windows and Ubuntu and validates the ZIP/tar.gz, `SHA256SUMS.txt`, and `RELEASE_INFO.json`.
 6. Builds an Installer with real Inno Setup on Windows CI and verifies Authenticode on both the Portable EXE and Setup EXE.
-5. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
-6. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
-7. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
+7. Builds a real generated-app DEB on Ubuntu and checks its dependencies, ELF, desktop entry, and icon with `dpkg-deb --info/--contents`.
+8. Creates a disposable Windows code-signing certificate, confirms that the signature remains valid after payload append, and confirms unsigned repackaging from a signed Runner does not inherit its signature.
+9. Launches the Linux result under Xvfb and checks WebKitGTK initialization and navigation logs.
+10. Publishes Windows ZIP, Linux `.tar.gz`/`.deb`, and SHA-256 artifacts; `v*` tags collect them into a GitHub Release.
 
 ## Dependencies
 
@@ -528,11 +543,11 @@ The first Ubuntu implementation now includes the cross-platform core, GTK3 GUI, 
 Explicit Linux Beta boundaries:
 
 - Ubuntu 22.04/24.04 x86_64 only. Generated apps run within the same platform family; Windows and Linux Runners cannot generate each other's binaries.
-- Generated output is a single ELF with an appended payload. The lw.Web2App tool has `.deb`/`.tar.gz` packages, but arbitrary generated apps do not yet receive their own DEB, desktop file, or icon.
+- Generated output remains a single ELF with an appended payload. `publish.linux.deb` can additionally produce an application-specific DEB with desktop metadata, an icon, and automatically derived shared-library dependencies.
 - Rendering uses the system WebKitGTK 4.1. Browser security updates and Web API behavior therefore follow Ubuntu updates.
 - Both GTK and Win32 package resources on a worker thread so the GUI remains responsive for large projects. Cancellation and percentage progress remain future work.
 
-Next priorities are generated-app desktop/icon/DEB metadata, AppImage evaluation, and an external-link policy, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
+Next priorities are AppImage evaluation and an external-link policy, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
 
 Other planned improvements:
 

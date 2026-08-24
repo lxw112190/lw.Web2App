@@ -120,6 +120,7 @@ add_library(lwweb_core STATIC
   src/packer/payload.cpp
   src/packer/packer.cpp
   src/pe/payload_binding.cpp
+  src/publish/linux_deb.cpp
   src/publish/publish_config.cpp
   src/publish/publisher.cpp
   src/publish/release_info.cpp

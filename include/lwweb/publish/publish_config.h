@@ -38,7 +38,8 @@ struct WindowsPublishConfig {
   SigningConfig signing;
 };
 
-// Ubuntu 发布目标。首个 publish 阶段先消费 tar_gz，DEB 由后续独立阶段实现。
+// Ubuntu 发布目标。tar_gz 是便携单文件归档；deb 会为生成应用创建菜单、
+// 图标和由最终 ELF 自动推导的共享库依赖。
 struct LinuxPublishConfig {
   bool tar_gz = true;
   bool deb = false;

@@ -119,7 +119,7 @@ struct State {
   RECT sponsor_rect{48, 400, 160, 512};
   RECT sponsor_divider{48, 382, 506, 383};
   RECT status_rect{48, 663, 824, 684};
-  std::wstring status = L"准备就绪 · 请选择网页目录和输出位置";
+  std::wstring status = L"准备就绪 · 请选择网页目录";
   COLORREF status_color = kSuccess;
   COLORREF icon_hint_color = kMuted;
   bool busy = false;
@@ -130,6 +130,12 @@ struct State {
 
 constexpr UINT kPackProgressMessage = WM_APP + 1;
 constexpr UINT kPackFinishedMessage = WM_APP + 2;
+
+// GUI 的默认输出与打包器放在同一目录树下，使用独立 out 子目录，既方便
+// 用户查找，也确保默认生成文件不会覆盖正在运行的 lw.Web2App.exe。
+std::filesystem::path DefaultOutputPath() {
+  return CurrentExecutablePath().parent_path() / L"out" / L"MyWebApp.exe";
+}
 
 // 工作线程只写入该结果对象，窗口线程负责显示消息并恢复控件状态。
 struct PackResult {
@@ -783,7 +789,9 @@ void BuildInterface(State& state) {
   CheckDlgButton(state.window, kLogging, BST_CHECKED);
 
   AddLabel(state, L"输出位置", 48, 613, 86, 20, 0, state.small_font);
-  AddEdit(state, L"", 134, 608, 566, kOutput, L"选择生成的 .exe 文件位置");
+  const auto default_output = DefaultOutputPath().wstring();
+  AddEdit(state, default_output.c_str(), 134, 608, 566, kOutput,
+          L"选择生成的 .exe 文件位置");
   AddButton(state, L"选择位置", 710, 608, 104, 30, kBrowseOutput);
   AddButton(state, L"生成 Windows EXE", 834, 618, 238, 50, kPack);
   EnableWindow(GetDlgItem(state.window, kBackendOrigin), FALSE);

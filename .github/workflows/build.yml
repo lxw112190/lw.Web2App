@@ -431,6 +431,8 @@ jobs:
       - name: Smoke test project publish
         run: |
           set -euo pipefail
+          sed -i 's/"deb": false/"deb": true/' \
+            examples/project-config/lwweb.json
           ./build/lw.Web2App publish \
             --config examples/project-config/lwweb.json \
             --output build/project-publish-smoke
@@ -439,14 +441,31 @@ jobs:
           test -n "$release"
           (cd "$release" && sha256sum -c SHA256SUMS.txt)
           test "$(find "$release" -maxdepth 1 -name '*.tar.gz' | wc -l)" -eq 1
-          tar -tzf "$release"/*.tar.gz | grep -q '^Native IPC Example$'
+          tar_contents=$(tar -tzf "$release"/*.tar.gz)
+          grep -q '^Native IPC Example$' <<<"$tar_contents"
+          deb=$(find "$release" -maxdepth 1 -name '*.deb' -print -quit)
+          test -n "$deb"
+          dpkg-deb --info "$deb"
+          deb_contents=$(dpkg-deb --contents "$deb")
+          grep -q './usr/bin/native-ipc$' <<<"$deb_contents"
+          grep -q './usr/share/applications/native-ipc.desktop$' \
+            <<<"$deb_contents"
+          grep -q './usr/share/icons/hicolor/scalable/apps/native-ipc.svg$' \
+            <<<"$deb_contents"
+          test -n "$(dpkg-deb --field "$deb" Depends)"
           grep -q '"format": "lw-web2app-release"' "$release/RELEASE_INFO.json"
           grep -q '"platform": "linux"' "$release/RELEASE_INFO.json"
+          grep -q '"type": "deb"' "$release/RELEASE_INFO.json"
 
       - name: Prepare Linux distributions
         run: |
           set -euo pipefail
-          mkdir -p dist/lw.Web2App/docs/assets dist/lw.Web2App/third_party/licenses
+          mkdir -p dist/lw.Web2App/docs/assets dist/lw.Web2App/examples \
+            dist/lw.Web2App/third_party/licenses
+          generated_deb=$(find build/project-publish-smoke -type f \
+            -name '*.deb' -print -quit)
+          test -n "$generated_deb"
+          cp "$generated_deb" dist/lw.Web2App/examples/
           cp build/lw.Web2App dist/lw.Web2App/
           cp README.md README_EN.md LICENSE THIRD_PARTY_NOTICES.md dist/lw.Web2App/
           cp docs/assets/sponsor.jpg docs/assets/lw.Web2App.png \
@@ -463,6 +482,7 @@ jobs:
             dist/lw.Web2App/lw.Web2App \
             dist/lw.Web2App/examples/wechat-article-formatter \
             dist/lw.Web2App/examples/native-ipc \
+            dist/lw.Web2App/examples/*.deb \
             > "dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt"
 
       - name: Upload downloadable artifact
@@ -473,6 +493,7 @@ jobs:
             dist/lw.Web2App-linux-x64-ubuntu-${{ matrix.ubuntu }}.tar.gz
             dist/packages/*.deb
             dist/packages/*.tar.gz
+            dist/lw.Web2App/examples/*.deb
             dist/SHA256SUMS-linux-x64-ubuntu-${{ matrix.ubuntu }}.txt
           if-no-files-found: error
           retention-days: 30

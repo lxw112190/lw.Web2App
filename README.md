@@ -12,7 +12,7 @@ Windows 图形打包器：
 
 <img src="docs/assets/lw.Web2App.png" alt="lw.Web2App Windows 图形打包器" width="760">
 
-Windows GUI 采用双栏布局：左侧选择本地网页或在线网址、启动页、启动路径与受控后台代理；右侧设置应用名称、PE 产品名、文件说明、公司、版本、版权、图标预览、窗口尺寸及运行选项。应用名称会自动同步到产品名和文件说明，用户手动修改对应字段后不再覆盖。底部统一设置输出位置并显示打包进度；大型项目的压缩工作在后台线程完成，界面保持响应。生成成功后会自动打开资源管理器并选中目标 EXE。
+Windows GUI 采用双栏布局：左侧选择本地网页或在线网址、启动页、启动路径与受控后台代理；右侧设置应用名称、PE 产品名、文件说明、公司、版本、版权、图标预览、窗口尺寸及运行选项。应用名称会自动同步到产品名和文件说明，用户手动修改对应字段后不再覆盖。底部统一设置输出位置并显示打包进度；默认输出为打包器所在目录下的 `out\MyWebApp.exe`，首次生成时自动创建 `out`。大型项目的压缩工作在后台线程完成，界面保持响应。生成成功后会自动打开资源管理器并选中目标 EXE。
 
 版本号允许输入 1 至 4 段数字并自动补齐为 `a.b.c.d`，每段范围为 `0..65535`。自定义图标支持 PNG/ICO，选择后会立即预览并在生成前校验；超过 256 像素的常见 PNG 会等比缩小后写入 EXE，也可随时恢复内置默认图标。界面中的赞助二维码和应用图标均已内嵌到 EXE，不依赖外部图片文件。
 
@@ -170,7 +170,7 @@ Artifact 中包含：
 
 推送 `v*` 标签时，CI 还会创建 GitHub Release，并附加可直接下载的 ZIP 包和 SHA-256 校验文件。
 
-Linux Artifact 额外包含 lw.Web2App 的 `.deb`、便携 `.tar.gz`、生成的单文件 `examples/wechat-article-formatter` 以及各文件 SHA-256。`.deb` 安装 GTK/WebKitGTK 依赖并注册应用菜单；便携包与生成应用仍要求目标 Ubuntu 已安装运行库。
+Linux Artifact 额外包含 lw.Web2App 的 `.deb`、便携 `.tar.gz`、生成的单文件 `examples/wechat-article-formatter`、Native IPC 示例应用专属 DEB 以及各文件 SHA-256。`.deb` 安装 GTK/WebKitGTK 依赖并注册应用菜单；便携包与生成应用仍要求目标 Ubuntu 已安装运行库。
 
 ### CI 集成测试项目
 
@@ -282,7 +282,7 @@ CMake 会优先从仓库根目录的 `.deps` 读取以下文件；文件不存�
       "installer": { "enabled": false },
       "signing": { "enabled": false }
     },
-    "linux": { "tar_gz": true, "deb": false }
+    "linux": { "tar_gz": true, "deb": true }
   }
 }
 ```
@@ -299,7 +299,7 @@ lw.Web2App.exe publish
 lw.Web2App.exe publish --config .\config\lwweb.json --output .\release
 ```
 
-Windows 默认生成 Portable EXE 与 ZIP，启用 Installer 后会增加 Setup EXE；Ubuntu 默认生成可执行文件与 `tar.gz`。每个版本拥有独立目录，并同时生成 `SHA256SUMS.txt` 和机器可读的 `RELEASE_INFO.json`：
+Windows 默认生成 Portable EXE 与 ZIP，启用 Installer 后会增加 Setup EXE；Ubuntu 默认生成可执行文件与 `tar.gz`，启用 `publish.linux.deb` 后还会生成应用专属 DEB。每个版本拥有独立目录，并同时生成 `SHA256SUMS.txt` 和机器可读的 `RELEASE_INFO.json`：
 
 ```text
 release/
@@ -311,9 +311,23 @@ release/
     └── RELEASE_INFO.json
 ```
 
-发布过程先在输出目录内的隐藏暂存目录完成打包、安装器、压缩和 SHA-256 计算，全部成功后才整体替换同版本目录；中途失败会清理半成品并保留原发布结果。配置文件中的 `publish.output` 仍以配置文件目录为基准，显式 `--output` 则以当前终端目录为基准。当前阶段尚未生成应用专属 DEB，因此启用 `publish.linux.deb` 会明确报错，而不会静默漏掉产物。
+Ubuntu 发布目录示例：
+
+```text
+release/
+└── MyApp-1.2.0-linux-x64/
+    ├── MyApp
+    ├── myapp_1.2.0_amd64.deb
+    ├── MyApp-1.2.0-linux-x64.tar.gz
+    ├── SHA256SUMS.txt
+    └── RELEASE_INFO.json
+```
+
+发布过程先在输出目录内的隐藏暂存目录完成打包、安装器或 DEB、压缩和 SHA-256 计算，全部成功后才整体替换同版本目录；中途失败会清理半成品并保留原发布结果。配置文件中的 `publish.output` 仍以配置文件目录为基准，显式 `--output` 则以当前终端目录为基准。
 
 Windows Installer 使用 [Inno Setup 6.3 或更高版本](https://jrsoftware.org/isinfo.php) 构建。启用 `publish.windows.installer.enabled` 后，程序依次从 `installer.iscc`、`PATH`、Inno Setup 常见安装目录查找 `ISCC.exe`；找不到时会明确失败，不会跳过安装器。安装器使用稳定的 `app.id` 作为升级身份，默认安装到 `{autopf}\应用名`，提供卸载入口，并按配置创建开始菜单、提供默认不勾选的桌面快捷方式选项。启用 Authenticode 时，Portable EXE 会先签名并写入安装器，随后 Setup EXE 再单独签名，因此两个最终文件都能验证发布者。
+
+Linux 应用 DEB 使用系统的 `dpkg-shlibdeps` 分析最终 ELF，因此 Ubuntu 22.04、24.04 的 GTK/WebKitGTK 等依赖会按实际构建环境生成，而不是写死包名。随后 `dpkg-deb` 创建安装包：可执行文件安装到 `/usr/bin/<app.id 最后一段>`，desktop 文件安装到 `/usr/share/applications`，PNG/SVG 图标安装到 hicolor 图标主题；未配置图标时使用内置默认 SVG。构建机需要安装 `dpkg-dev`，缺少工具、依赖分析失败或 DEB 校验失败都会终止原子发布。第一阶段固定 `amd64`，暂不生成 ARM64、RPM、AppImage、Flatpak 或 Snap。
 
 ## CLI 使用方法
 
@@ -536,10 +550,11 @@ CI 配置位于 [.github/workflows/build.yml](.github/workflows/build.yml)，执
 3. 三个平台任务都构建 `wechat-article-formatter` 的 Vite 生产产物。
 4. Windows 与 Ubuntu 都执行 `publish` 冒烟测试，并校验 ZIP/tar.gz、`SHA256SUMS.txt` 和 `RELEASE_INFO.json`。
 5. Windows CI 使用真实 Inno Setup 生成 Installer，并验证 Portable 与 Setup 的 Authenticode 签名。
-4. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
-5. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
-6. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
-7. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
+6. Ubuntu CI 为生成应用构建真实 DEB，并用 `dpkg-deb --info/--contents` 校验依赖、ELF、desktop 与图标。
+7. 分别生成 Windows EXE 或 Linux ELF，并用 `inspect` 验证 Payload SHA-256；同时打包并检查 Native IPC 示例的 Capability 配置。
+8. Windows CI 创建一次性代码签名证书，验证签名后追加 Payload 仍有效，并验证从签名 Runner 再打包未签名应用时不会继承旧签名。
+9. Linux 在 Xvfb 中运行生成应用，检查 WebKitGTK 初始化和导航日志。
+10. 输出 Windows ZIP、Linux `.tar.gz`/`.deb` 与 `SHA256SUMS`，上传 Artifact；`v*` 标签会汇总到 GitHub Release。
 
 ## 第三方依赖
 
@@ -559,11 +574,11 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 当前 Linux Beta 的明确边界：
 
 - 仅支持 Ubuntu 22.04/24.04 x86_64；生成应用必须在相同平台家族运行，不能把 Windows EXE 直接拿到 Linux，也不能跨平台生成另一端 Runner。
-- 生成结果是带 Payload 的单文件 ELF；lw.Web2App 工具本身提供 `.deb`/`.tar.gz`，但尚未为每个任意生成应用制作独立 DEB、desktop 文件和图标。
+- 生成结果仍是带 Payload 的单文件 ELF；`publish.linux.deb` 可额外生成带 desktop、图标和自动共享库依赖的应用专属 DEB。
 - 使用系统 WebKitGTK 4.1，不捆绑浏览器内核，因此安全更新与 Web API 兼容性跟随 Ubuntu 更新。
 - GTK 与 Win32 图形打包器都在后台线程压缩资源，界面在大型项目打包期间保持响应；取消操作和进度百分比属于后续改进。
 
-下一阶段优先增加生成应用的 desktop/图标/DEB 元数据、AppImage 可行性和外部链接策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
+下一阶段优先评估 AppImage 可行性和外部链接策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
 
 其他后续方向：
 

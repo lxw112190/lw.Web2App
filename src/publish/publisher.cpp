@@ -4,6 +4,7 @@
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/sha256.h"
 #include "lwweb/packer/packer.h"
+#include "lwweb/publish/linux_deb.h"
 #include "lwweb/publish/publish_config.h"
 #ifdef _WIN32
 #include "lwweb/pe/authenticode.h"
@@ -369,18 +370,19 @@ PublishResult PublishProject(const PublishOptions& options) {
     throw Error("publish output must not be inside the web source directory");
 
   const bool windows = options.platform == PublishPlatform::Windows;
-  if (!windows && config.publish.linux.deb)
-    throw Error("Linux application DEB publishing is not available yet");
   const bool portable = windows ? config.publish.windows.portable : true;
   const bool archive = windows ? config.publish.windows.zip
                                : config.publish.linux.tar_gz;
   const bool installer =
       windows && config.publish.windows.installer.enabled;
+  const bool deb = !windows && config.publish.linux.deb;
 #ifndef _WIN32
   if (installer)
     throw Error("Windows installer publishing requires a Windows host");
+#else
+  if (deb) throw Error("Linux DEB publishing requires a Linux host");
 #endif
-  if (!portable && !archive && !installer)
+  if (!portable && !archive && !installer && !deb)
     throw Error("publish has no enabled artifacts for this platform");
 
   std::error_code error;
@@ -431,6 +433,22 @@ PublishResult PublishProject(const PublishOptions& options) {
     }
 #endif
   }
+  std::optional<std::filesystem::path> deb_path;
+  if (deb) {
+    Progress(options, "Publish: build Linux DEB");
+#ifndef _WIN32
+    LinuxDebBuildOptions deb_options;
+    deb_options.application = pack.output;
+    deb_options.icon = config.app.icon;
+    deb_options.output_directory = staging.Path();
+    deb_options.app_id = config.app.id;
+    deb_options.app_name = config.app.name;
+    deb_options.app_version = config.app.version;
+    deb_options.publisher = config.app.company;
+    deb_options.description = config.app.description;
+    deb_path = BuildLinuxDeb(deb_options).package;
+#endif
+  }
   std::optional<std::filesystem::path> archive_path;
   if (archive) {
     Progress(options, windows ? "Publish: create ZIP archive"
@@ -455,6 +473,11 @@ PublishResult PublishProject(const PublishOptions& options) {
     distributables.push_back(*installer_path);
     info.artifacts.push_back({installer_path->filename().u8string(), "installer",
                               platform, "x64", pack.signing.enabled, {}});
+  }
+  if (deb_path) {
+    distributables.push_back(*deb_path);
+    info.artifacts.push_back({deb_path->filename().u8string(), "deb", platform,
+                              "x64", false, {}});
   }
   if (archive_path) {
     distributables.push_back(*archive_path);

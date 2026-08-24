@@ -83,8 +83,7 @@ void ConfigureEnvironmentProxy(WebKitWebsiteDataManager* manager, Logger& logger
 }
 
 std::string DefaultOutputPath() {
-  const auto* home = std::getenv("HOME");
-  return (std::filesystem::path(home && *home ? home : ".") / "MyWebApp").string();
+  return (CurrentExecutablePath().parent_path() / "out" / "MyWebApp").string();
 }
 
 // GTK/WebKitGTK 信号回调共享的轻量运行状态；对象生命周期覆盖整个 gtk_main 循环。
