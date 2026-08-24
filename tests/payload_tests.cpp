@@ -482,9 +482,15 @@ void RunPayloadTests() {
     Check(unknown_grant && unknown_grant->status == 404,
           "unknown local file grant returns 404");
     const auto local_write = application.Post(local_grant.url, "change", "text/plain");
-    Check(local_write && local_write->status == 405 &&
-              local_write->get_header_value("Allow") == "GET, HEAD",
-          "local file bridge rejects non-read methods before reading a body");
+    if (!local_write || local_write->status != 405 ||
+        local_write->get_header_value("Allow") != "GET, HEAD") {
+      const auto detail =
+          local_write ? "status=" + std::to_string(local_write->status) +
+                            ", allow=" + local_write->get_header_value("Allow")
+                      : "no HTTP response";
+      throw std::runtime_error(
+          "local file bridge rejects non-read methods: " + detail);
+    }
     const auto login = application.Post(
         "/__lw_proxy__/sysUser/login?source=test", page_headers,
         std::string(R"({"message":"proxy-test"})"),

@@ -142,9 +142,13 @@ void RunLocalFileBridgeTests() {
         "local file bridge rejects an unknown grant token");
 
   const auto write = client.Post(file_grant.url, "change", "text/plain");
-  Check(write && write->status == 405 &&
-            write->get_header_value("Allow") == "GET, HEAD",
-        "local file bridge rejects non-read methods");
+  if (!write || write->status != 405 ||
+      write->get_header_value("Allow") != "GET, HEAD") {
+    const auto detail = write ? "status=" + std::to_string(write->status) +
+                                    ", allow=" + write->get_header_value("Allow")
+                              : "no HTTP response";
+    throw std::runtime_error("local file bridge rejects non-read methods: " + detail);
+  }
 
   const auto wrong_host =
       client.Get(file_grant.url, httplib::Headers{{"Host", "evil.example"}});

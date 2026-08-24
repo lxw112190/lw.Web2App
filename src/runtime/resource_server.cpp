@@ -306,17 +306,6 @@ std::string ResourceServer::Start() {
             SetLocalFileHeaders(response);
           }
         };
-    server->set_pre_routing_handler(
-        [reject_local_file_write](const httplib::Request& request,
-                                  httplib::Response& response) {
-          if (request.path != kLocalFilePrefix &&
-              request.path.rfind(std::string(kLocalFilePrefix) + "/", 0) != 0)
-            return httplib::Server::HandlerResponse::Unhandled;
-          if (request.method == "GET" || request.method == "HEAD")
-            return httplib::Server::HandlerResponse::Unhandled;
-          reject_local_file_write(request, response);
-          return httplib::Server::HandlerResponse::Handled;
-        });
     if (backend_proxy_) {
       const auto pattern = "^" +
                            RegexEscape(payload_.manifest.backend_proxy.prefix) +
@@ -350,10 +339,11 @@ std::string ResourceServer::Start() {
                                   static_cast<std::uint16_t>(port_),
                                   file_grants_, logger_);
                 });
-    // cpp-httplib 0.51 only runs pre-routing after finding a matching route.
     // Register every ordinary write verb so the bridge reliably returns 405
-    // instead of the library's default 404, while the pre-routing handler still
-    // rejects the request before any route-specific processing.
+    // instead of the library's default 404. Do not reject these requests from a
+    // pre-routing handler: replying before cpp-httplib consumes the small,
+    // globally bounded request body can reset the Windows connection and make
+    // the client lose the 405 response.
     const std::string local_file_pattern = "^/__lw_file__(?:/.*)?$";
     server->Post(local_file_pattern, reject_local_file_write);
     server->Put(local_file_pattern, reject_local_file_write);
