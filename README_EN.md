@@ -417,7 +417,9 @@ A generated EXE can also execute CLI packaging commands. Only its original Runne
 
 ## Native IPC (experimental)
 
-Native IPC is intended only for trusted static pages packaged with the application. It does not expose arbitrary native functions. Access requires three independent gates: explicit Manifest enablement, a capability for every method, and fresh native-side path validation for every filesystem operation. Windows uses WebView2 WebMessage and Linux uses a dedicated WebKitGTK `lwIpc` ScriptMessageHandler, while pages use one API:
+Native IPC is intended only for trusted static pages packaged with the application. It
+is disabled by default and authorized per-method. Windows and Linux pages use one
+Promise API:
 
 ```js
 const info = await window.lw.invoke("app.getInfo");
@@ -439,48 +441,15 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.delete
 ```
 
-The example invokes both `dialog.selectDirectory` and `dialog.openFile`. A directory selected through the system dialog becomes a session-only filesystem grant and is forgotten when the app exits. The page may then invoke `fs.exists`, `fs.list`, `fs.copy`, `fs.move`, and `fs.delete` within that grant. `fs.copy` handles regular files, refuses replacement by default, and replaces an existing target only with `overwrite: true`; recursive directory copies are intentionally unsupported in the first version. Fixed roots can instead be embedded with repeatable `--ipc-root` options.
+Directory selection creates a process-local Session Grant. The Local File Bridge uses
+random File Grants and same-origin HTTP Range streaming for large files without exposing
+disk paths. `fs.move` supports a safe copy-and-delete fallback when a regular file crosses
+a disk or filesystem boundary.
 
-### Controlled Local File Bridge
-
-Large PDFs, videos, images, and audio files must not cross JSON IPC as Base64. The
-`dialog.file` capability enables `dialog.openFile`: Native IPC opens the system picker
-and creates a random process-local grant, while the same-origin localhost HTTP data
-plane streams the bytes:
-
-```js
-const result = await lw.invoke("dialog.openFile", {
-  multiple: false,
-  filters: [{ name: "PDF documents", extensions: ["pdf"] }]
-});
-
-const file = result.files[0];
-// { id, name, size, mime, url: "/__lw_file__/<opaque-id>/document.pdf" }
-const loadingTask = pdfjsLib.getDocument({ url: file.url });
-```
-
-Single and multiple selection always return `files[]`. Windows uses `IFileOpenDialog`
-and Linux uses GTK File Chooser. Up to 16 filter groups and 32 safe extensions per
-group are accepted; `"*"` means all files. The web page never receives the actual disk
-path, and the display filename in the URL is never used to locate a file. Only a
-canonical regular file selected by the native dialog can receive an unpredictable
-grant ID of at least 128 bits. Windows device namespaces and UNC paths are rejected.
-
-`/__lw_file__/` accepts only `GET` and `HEAD` and supports one fixed, open-ended, or
-suffix byte range. It returns the appropriate `200`, `206`, `404`, `405`, or `416`
-status together with `Accept-Ranges`, accurate `Content-Length`/`Content-Range`,
-`X-Content-Type-Options: nosniff`, and `Cache-Control: private, no-store`. A 64 KiB
-streaming buffer keeps memory use independent of file size; multipart ranges return
-`416` in the first version. Grants disappear when the Runtime exits and may be revoked
-early with `await lw.invoke("file.revoke", { id: file.id })`.
-
-The `fs.*` methods remain the control plane for file management. The Local File Bridge
-is a read-only data plane and is unavailable in URL mode. INFO logs never include the
-path, filename, or complete grant token.
-
-The JSON protocol is `lw-ipc-v1`. Messages are capped at 1 MiB, IDs and method names at 128 bytes, and each page may have at most 64 pending requests; duplicate IDs return `BUSY`. Stable error codes are `INVALID_REQUEST`, `INVALID_ARGUMENT`, `METHOD_NOT_FOUND`, `PERMISSION_DENIED`, `USER_CANCELLED`, `NOT_FOUND`, `ALREADY_EXISTS`, `IO_ERROR`, `UNSUPPORTED`, `BUSY`, and `INTERNAL_ERROR`.
-
-With IPC enabled, the Runtime accepts messages only from the exact current `127.0.0.1` application-port origin and blocks top-level navigation to external origins. The Linux transport also requires a random per-process session token so a cross-origin iframe cannot bypass the top-level restriction. URL mode cannot enable IPC. Filesystem paths must be absolute local paths; existing paths are canonicalized, new targets are validated through their canonical parent, and both source and destination must remain under a fixed Manifest root or session grant. Windows device paths, UNC paths, and ADS are rejected, and symbolic links/reparse points cannot escape a granted root. INFO logs record method names, result codes, and security rejections, but never method parameters or user paths.
+See the **[complete Native IPC guide](docs/native-ipc_EN.md)** for capabilities,
+parameters, results, errors, security boundaries, and File Bridge examples. A
+[Chinese guide](docs/native-ipc.md) and the [runnable example](examples/native-ipc/index.html)
+are also available.
 
 ## Payload V2 Format
 
@@ -545,6 +514,8 @@ src/ipc/       Cross-platform IPC protocol, capabilities, path permissions, and 
 src/pe/        Icon/version resources, Payload Binding, and Authenticode
 src/publish/   lwweb.json parsing, atomic publishing, archives, checksums, and release metadata
 src/common/    File, path, and SHA-256 utilities
+docs/          Payload format and bilingual Native IPC guides
+examples/      Package-ready project configuration and Native IPC examples
 tests/         Unit and packaging/resource integration tests
 ```
 

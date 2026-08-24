@@ -1,4 +1,6 @@
 #include "lwweb/ipc/ipc_dispatcher.h"
+#include "lwweb/ipc/filesystem_access.h"
+#include "lwweb/ipc/ipc_message.h"
 #include "lwweb/packer/manifest.h"
 
 #include <chrono>
@@ -116,4 +118,33 @@ void RunFilesystemAccessTests() {
   Check(!capability_denied.ok &&
             capability_denied.error.code == "PERMISSION_DENIED",
         "fs.copy requires its dedicated capability");
+
+  const auto fallback_source = root / "folder" / "fallback-source.txt";
+  const auto fallback_destination =
+      root / "folder" / "fallback-destination.txt";
+  std::ofstream(fallback_source) << "fallback";
+  lwweb::ipc_detail::MoveRegularFileByCopyAndDelete(
+      fallback_source, fallback_destination, false);
+  Check(!std::filesystem::exists(fallback_source) &&
+            ReadText(fallback_destination) == "fallback",
+        "cross-filesystem move fallback publishes a complete copy before removing the source");
+
+  std::ofstream(fallback_source) << "new";
+  bool fallback_exists_rejected = false;
+  try {
+    lwweb::ipc_detail::MoveRegularFileByCopyAndDelete(
+        fallback_source, fallback_destination, false);
+  } catch (const lwweb::IpcException& error) {
+    fallback_exists_rejected = error.Code() == "ALREADY_EXISTS";
+  }
+  Check(fallback_exists_rejected &&
+            ReadText(fallback_source) == "new" &&
+            ReadText(fallback_destination) == "fallback",
+        "cross-filesystem move fallback preserves both files when overwrite is disabled");
+
+  lwweb::ipc_detail::MoveRegularFileByCopyAndDelete(
+      fallback_source, fallback_destination, true);
+  Check(!std::filesystem::exists(fallback_source) &&
+            ReadText(fallback_destination) == "new",
+        "cross-filesystem move fallback replaces the destination only when requested");
 }

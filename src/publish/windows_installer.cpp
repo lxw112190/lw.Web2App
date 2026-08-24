@@ -2,10 +2,12 @@
 
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
+#include "lwweb/common/windows_process.h"
 
 #include <Windows.h>
 
 #include <array>
+#include <chrono>
 #include <fstream>
 #include <sstream>
 #include <vector>
@@ -61,53 +63,11 @@ std::filesystem::path CommonInstallIscc() {
   return {};
 }
 
-std::wstring QuoteArgument(const std::wstring& value) {
-  std::wstring quoted = L"\"";
-  std::size_t backslashes = 0;
-  for (const auto character : value) {
-    if (character == L'\\') {
-      ++backslashes;
-      continue;
-    }
-    if (character == L'\"') {
-      quoted.append(backslashes * 2 + 1, L'\\');
-      quoted.push_back(L'\"');
-    } else {
-      quoted.append(backslashes, L'\\');
-      quoted.push_back(character);
-    }
-    backslashes = 0;
-  }
-  quoted.append(backslashes * 2, L'\\');
-  quoted.push_back(L'\"');
-  return quoted;
-}
-
 void RunIscc(const std::filesystem::path& iscc,
              const std::filesystem::path& script) {
-  std::wstring command = QuoteArgument(iscc.wstring()) + L" /Qp " +
-                         QuoteArgument(script.wstring());
-  std::vector<wchar_t> mutable_command(command.begin(), command.end());
-  mutable_command.push_back(L'\0');
-  STARTUPINFOW startup{sizeof(startup)};
-  PROCESS_INFORMATION process{};
-  const auto working_directory = script.parent_path().wstring();
-  if (!CreateProcessW(iscc.c_str(), mutable_command.data(), nullptr, nullptr,
-                      FALSE, CREATE_NO_WINDOW, nullptr,
-                      working_directory.c_str(), &startup, &process))
-    throw Error("Cannot start Inno Setup compiler: " +
-                WindowsErrorMessage(GetLastError()));
-  CloseHandle(process.hThread);
-  const auto wait = WaitForSingleObject(process.hProcess, INFINITE);
-  DWORD exit_code = 0;
-  const bool read_exit =
-      GetExitCodeProcess(process.hProcess, &exit_code) != FALSE;
-  CloseHandle(process.hProcess);
-  if (wait != WAIT_OBJECT_0 || !read_exit)
-    throw Error("Inno Setup compiler did not finish correctly");
-  if (exit_code != 0)
-    throw Error("Inno Setup compiler failed with exit code " +
-                std::to_string(exit_code));
+  RunWindowsExternalTool(iscc, {L"/Qp", script.wstring()},
+                         script.parent_path(), std::chrono::minutes(3),
+                         "Inno Setup compiler");
 }
 
 std::string EscapeInnoValue(const std::string& value) {

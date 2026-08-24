@@ -189,8 +189,10 @@ jobs:
 
       - name: Verify Authenticode signed and unsigned repackaging
         shell: pwsh
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = "Stop"
+          Write-Host "=== 1/8 Create and trust the CI code-signing certificate ==="
           $certificate = New-SelfSignedCertificate -Type CodeSigningCert `
             -Subject 'CN=lw.Web2App CI Test' `
             -CertStoreLocation 'Cert:\CurrentUser\My' `
@@ -213,6 +215,7 @@ jobs:
             New-Item -ItemType Directory -Force build/signing-smoke | Out-Null
             $source = (Resolve-Path 'examples/native-ipc').Path
             $signed = Join-Path $PWD 'build/signing-smoke/signed.exe'
+            Write-Host "=== 2/8 Package and sign the Native IPC example ==="
             $pack = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
               -ArgumentList @(
                 'pack', $source, $signed,
@@ -222,6 +225,8 @@ jobs:
             if ($pack.ExitCode -ne 0 -or -not (Test-Path $signed)) {
               throw 'Signed packaging failed'
             }
+            Write-Host "Signed package completed"
+            Write-Host "=== 3/8 Verify the signed package and payload ==="
             $signature = Get-AuthenticodeSignature $signed
             if ($signature.Status -ne 'Valid') {
               throw "Signed output verification failed: $($signature.StatusMessage)"
@@ -233,6 +238,7 @@ jobs:
             if ($inspect.ExitCode -ne 0) { throw 'Signed payload inspection failed' }
 
             $unsigned = Join-Path $PWD 'build/signing-smoke/repacked-unsigned.exe'
+            Write-Host "=== 4/8 Repack the signed Runner as an unsigned application ==="
             $repack = Start-Process -FilePath $signed -Wait -PassThru -NoNewWindow `
               -ArgumentList @(
                 'pack', $source, $unsigned,
@@ -249,6 +255,7 @@ jobs:
               -ArgumentList @('inspect', $unsigned)
             if ($inspect.ExitCode -ne 0) { throw 'Unsigned payload inspection failed' }
 
+            Write-Host "=== 5/8 Create the signed publish configuration ==="
             $publishOutput = Join-Path $PWD 'build/signing-smoke/publish-output'
             $projectConfig = Join-Path $PWD 'build/signing-smoke/lwweb.json'
             @{
@@ -282,13 +289,26 @@ jobs:
                 }
               }
             } | ConvertTo-Json -Depth 10 | Set-Content $projectConfig -Encoding utf8NoBOM
+            Write-Host "=== 6/8 Publish the signed portable app and Installer ==="
             $publish = Start-Process -FilePath $packer -Wait -PassThru -NoNewWindow `
               -ArgumentList @('publish', '--config', $projectConfig)
             if ($publish.ExitCode -ne 0) { throw 'Signed Installer publish failed' }
+            Write-Host "Signed publish completed"
             $release = Join-Path $publishOutput 'Signed Publish-1.0.0-windows-x64'
             $publishedApp = Join-Path $release 'Signed Publish.exe'
             $publishedSetup = Join-Path $release 'Signed Publish-Setup-1.0.0.exe'
-            foreach ($artifact in @($publishedApp, $publishedSetup)) {
+            Write-Host "=== 7/8 Verify the published portable application ==="
+            foreach ($artifact in @($publishedApp)) {
+              if (-not (Test-Path $artifact)) { throw "Missing signed artifact: $artifact" }
+              $artifactSignature = Get-AuthenticodeSignature $artifact
+              if ($artifactSignature.Status -ne 'Valid') {
+                throw "Artifact signature is invalid: $artifact"
+              }
+              & $signTool.FullName verify /pa /v $artifact
+              if ($LASTEXITCODE -ne 0) { throw "SignTool rejected artifact: $artifact" }
+            }
+            Write-Host "=== 8/8 Verify the published Installer and release metadata ==="
+            foreach ($artifact in @($publishedSetup)) {
               if (-not (Test-Path $artifact)) { throw "Missing signed artifact: $artifact" }
               $artifactSignature = Get-AuthenticodeSignature $artifact
               if ($artifactSignature.Status -ne 'Valid') {

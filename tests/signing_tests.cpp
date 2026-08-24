@@ -3,6 +3,7 @@
 #include "lwweb/packer/payload.h"
 
 #ifdef _WIN32
+#include "lwweb/common/windows_process.h"
 #include "lwweb/pe/authenticode.h"
 
 #include <Windows.h>
@@ -187,5 +188,34 @@ void RunSigningTests() {
   }
   Check(configured_tool_rejected,
         "an invalid configured SignTool path is rejected");
+
+  bool tool_output_captured = false;
+  try {
+    lwweb::RunWindowsExternalTool(
+        lwweb::CurrentExecutablePath(), {L"--lwweb-test-tool-fail"}, {},
+        std::chrono::seconds(2), "Fake external tool");
+  } catch (const std::exception& error) {
+    const std::string message = error.what();
+    tool_output_captured =
+        message.find("exit code 23") != std::string::npos &&
+        message.find("diagnostic from fake external tool") !=
+            std::string::npos;
+  }
+  Check(tool_output_captured,
+        "external tool failures include the exit code and captured diagnostics");
+
+  bool tool_timeout_enforced = false;
+  const auto timeout_started = std::chrono::steady_clock::now();
+  try {
+    lwweb::RunWindowsExternalTool(
+        lwweb::CurrentExecutablePath(), {L"--lwweb-test-tool-timeout"}, {},
+        std::chrono::milliseconds(100), "Slow external tool");
+  } catch (const std::exception& error) {
+    tool_timeout_enforced =
+        std::string(error.what()).find("timed out") != std::string::npos;
+  }
+  const auto timeout_elapsed = std::chrono::steady_clock::now() - timeout_started;
+  Check(tool_timeout_enforced && timeout_elapsed < std::chrono::seconds(5),
+        "external tool timeout terminates a stalled child process promptly");
 #endif
 }

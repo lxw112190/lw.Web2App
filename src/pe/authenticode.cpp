@@ -3,6 +3,7 @@
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/path_utils.h"
+#include "lwweb/common/windows_process.h"
 #include "lwweb/packer/packer.h"
 
 #include <Windows.h>
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cstddef>
 #include <fstream>
 #include <iomanip>
@@ -118,57 +120,6 @@ std::string NormalizeThumbprint(const std::string& value) {
   if (normalized.size() != 40)
     throw Error("Code-signing certificate thumbprint must contain 40 SHA-1 hex digits");
   return normalized;
-}
-
-std::wstring QuoteArgument(const std::wstring& value) {
-  std::wstring quoted = L"\"";
-  std::size_t backslashes = 0;
-  for (const auto character : value) {
-    if (character == L'\\') {
-      ++backslashes;
-      continue;
-    }
-    if (character == L'\"') {
-      quoted.append(backslashes * 2 + 1, L'\\');
-      quoted.push_back(L'\"');
-    } else {
-      quoted.append(backslashes, L'\\');
-      quoted.push_back(character);
-    }
-    backslashes = 0;
-  }
-  quoted.append(backslashes * 2, L'\\');
-  quoted.push_back(L'\"');
-  return quoted;
-}
-
-void RunTool(const std::filesystem::path& executable,
-             const std::vector<std::wstring>& arguments,
-             const char* operation) {
-  std::wstring command = QuoteArgument(executable.wstring());
-  for (const auto& argument : arguments) {
-    command.push_back(L' ');
-    command += QuoteArgument(argument);
-  }
-  std::vector<wchar_t> mutable_command(command.begin(), command.end());
-  mutable_command.push_back(L'\0');
-  STARTUPINFOW startup{sizeof(startup)};
-  PROCESS_INFORMATION process{};
-  if (!CreateProcessW(executable.c_str(), mutable_command.data(), nullptr,
-                      nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
-                      &startup, &process))
-    throw Error(std::string("Cannot start ") + operation + ": " +
-                WindowsErrorMessage(GetLastError()));
-  CloseHandle(process.hThread);
-  const auto wait = WaitForSingleObject(process.hProcess, INFINITE);
-  DWORD exit_code = 0;
-  const bool read_exit = GetExitCodeProcess(process.hProcess, &exit_code) != FALSE;
-  CloseHandle(process.hProcess);
-  if (wait != WAIT_OBJECT_0 || !read_exit)
-    throw Error(std::string(operation) + " did not finish correctly");
-  if (exit_code != 0)
-    throw Error(std::string(operation) + " failed with exit code " +
-                std::to_string(exit_code));
 }
 
 std::filesystem::path SearchPathForSignTool() {
@@ -281,7 +232,8 @@ void SignAuthenticode(const std::filesystem::path& executable,
                       L"SHA256"});
   }
   arguments.push_back(executable.wstring());
-  RunTool(signtool, arguments, "SignTool signing");
+  RunWindowsExternalTool(signtool, arguments, {}, std::chrono::minutes(2),
+                         "SignTool signing");
   if (config.verify_after_sign) VerifyAuthenticodeSignature(executable);
 }
 

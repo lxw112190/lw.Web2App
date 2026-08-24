@@ -1,7 +1,9 @@
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 
 void RunCliTests();
 void RunFilesystemAccessTests();
@@ -57,6 +59,15 @@ int RunFakeIscc(const std::filesystem::path& script_path) {
 
 int main(int argc, char** argv) {
 #ifdef _WIN32
+  if (argc == 2 && std::string(argv[1]) == "--lwweb-test-tool-fail") {
+    std::cerr << "diagnostic from fake external tool\n";
+    return 23;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--lwweb-test-tool-timeout") {
+    std::cerr << "fake external tool started\n";
+    std::this_thread::sleep_for(std::chrono::seconds(30));
+    return 0;
+  }
   if (argc >= 2) {
     const auto candidate = std::filesystem::u8path(argv[argc - 1]);
     if (candidate.extension() == ".iss") return RunFakeIscc(candidate);

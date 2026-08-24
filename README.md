@@ -424,14 +424,15 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
 
 ## Native IPC（实验性）
 
-Native IPC 只面向打包进应用的可信静态页面。它不会给页面暴露任意 Native 函数，而是采用“Manifest 明确启用 → 每个方法单独声明 Capability → 每次文件操作重新校验路径”的三层限制。Windows 使用 WebView2 WebMessage，Linux 使用 WebKitGTK 独立的 `lwIpc` ScriptMessageHandler；网页端统一使用：
+Native IPC 只面向打包进应用的可信静态页面，默认关闭，并按方法 Capability 授权。
+Windows 和 Linux 的网页端统一使用 Promise API：
 
 ```js
 const info = await window.lw.invoke("app.getInfo");
 // { appId, title, platform: "windows" | "linux", arch: "x64", version }
 ```
 
-打包 [Native IPC 示例](examples/native-ipc/index.html)：
+打包仓库内的[简单示例](examples/native-ipc/index.html)：
 
 ```powershell
 lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
@@ -446,85 +447,13 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.delete
 ```
 
-示例先调用 `dialog.selectDirectory`。用户通过系统窗口选择的目录会成为仅本次进程有效的 Session Grant，应用退出后自动失效；随后可以调用：
+系统目录选择会创建仅本次运行有效的 Session Grant；本地文件桥通过随机 File Grant
+和同源 HTTP Range 流式提供大型文件，不把真实磁盘路径交给网页。`fs.move` 对普通文件
+支持跨磁盘/跨文件系统的安全 copy + delete 回退。
 
-```js
-const selected = await lw.invoke("dialog.selectDirectory");
-const listing = await lw.invoke("fs.list", { path: selected.path });
-await lw.invoke("fs.move", {
-  from: selected.path + "/before.txt",
-  to: selected.path + "/after.txt",
-  overwrite: false
-});
-await lw.invoke("fs.delete", { path: selected.path + "/after.txt" });
-```
-
-也可以检查路径并复制普通文件。复制默认禁止覆盖，只有显式传入
-`overwrite: true` 才会替换已有目标；第一版不递归复制目录：
-
-```js
-const state = await lw.invoke("fs.exists", {
-  path: selected.path + "/photo.jpg"
-});
-if (state.exists) {
-  await lw.invoke("fs.copy", {
-    from: selected.path + "/photo.jpg",
-    to: selected.path + "/photo-backup.jpg",
-    overwrite: false
-  });
-}
-```
-
-### 受控本地文件桥
-
-大型 PDF、视频、图片和音频不应经过 JSON/Base64 IPC 传输。`dialog.file`
-Capability 提供 `dialog.openFile`：Native IPC 只负责显示系统文件窗口并创建
-当前进程有效的随机授权，文件内容由同源 localhost HTTP 数据面流式提供：
-
-```js
-const result = await lw.invoke("dialog.openFile", {
-  multiple: false,
-  filters: [
-    { name: "PDF documents", extensions: ["pdf"] }
-  ]
-});
-
-const file = result.files[0];
-// {
-//   id: "128-bit-random-id",
-//   name: "document.pdf",
-//   size: 125873421,
-//   mime: "application/pdf",
-//   url: "/__lw_file__/<opaque-id>/document.pdf"
-// }
-const loadingTask = pdfjsLib.getDocument({ url: file.url });
-```
-
-单选和多选始终统一返回 `files[]`；`multiple: true` 在 Windows 使用
-`IFileOpenDialog` 多选，在 Linux 使用 GTK File Chooser。`filters` 最多 16 组，
-每组最多 32 个无路径字符的扩展名；`"*"` 表示所有文件。网页不会得到真实磁盘
-路径，URL 的显示文件名也不参与磁盘定位。只有 Native 对话框选中的规范化普通文件
-才能生成至少 128 bit 的不可预测授权 ID；Windows 设备命名空间和 UNC 路径会被拒绝。
-
-`/__lw_file__/` 只接受 `GET` 和 `HEAD`，支持单个 `Range`（固定区间、开放结束
-区间和 suffix 区间），分别正确返回 `200`、`206`、`404`、`405` 或 `416`。
-响应包含 `Accept-Ranges: bytes`、准确的 `Content-Length`/`Content-Range`、
-`X-Content-Type-Options: nosniff` 和 `Cache-Control: private, no-store`。
-文件以 64 KiB 缓冲流式读取，内存占用与文件大小无关；多区间请求第一版返回
-`416`。授权只存在于当前 Runtime 内存中，应用退出后全部失效，也可以主动撤销：
-
-```js
-await lw.invoke("file.revoke", { id: file.id });
-```
-
-常规文件管理仍使用 `fs.copy`、`fs.move`、`fs.delete` 等 IPC 方法；本地文件桥只提供
-大型文件的只读数据面。URL 模式不能启用 Native IPC，因此也不能获得本地文件授权。
-INFO 日志仅记录授权创建/释放和完整或区间读取，不记录真实路径、文件名或完整 Token；
-DEBUG 最多记录 Token 前 8 位、文件大小与 MIME。
-
-协议版本为 `lw-ipc-v1`，请求和响应使用 JSON。消息最大 1 MiB，ID/方法名最大 128 字节，同一页面最多保留 64 个待处理请求，重复 ID 返回 `BUSY`。错误码稳定为 `INVALID_REQUEST`、`INVALID_ARGUMENT`、`METHOD_NOT_FOUND`、`PERMISSION_DENIED`、`USER_CANCELLED`、`NOT_FOUND`、`ALREADY_EXISTS`、`IO_ERROR`、`UNSUPPORTED`、`BUSY` 和 `INTERNAL_ERROR`。
-
-启用 IPC 时，Runtime 只接受来自当前 `127.0.0.1` 应用端口精确 Origin 的消息，并阻止顶层页面跳转到外部 Origin；Linux 传输还要求进程启动时生成的随机会话令牌，避免跨源 iframe 绕过顶层页面限制；URL 模式不能启用 IPC。文件路径必须是绝对本地路径，现有路径按真实路径规范化，新路径按真实父目录规范化，源和目标都必须位于 Manifest 固定根目录或 Session Grant 内。Windows 设备路径、UNC 路径和 ADS 被拒绝，符号链接/重解析点不能用于逃逸授权根目录。默认 INFO 日志只记录 IPC 方法名、结果错误码及安全拒绝事件，不记录方法参数和用户本地路径。
+完整的 Capability 表、参数、返回值、错误码、安全边界和文件桥示例见
+**[Native IPC 中文指南](docs/native-ipc.md)**；也可查看
+[English guide](docs/native-ipc_EN.md) 和[可运行示例](examples/native-ipc/index.html)。
 
 ## Payload V2 格式
 
@@ -586,6 +515,8 @@ src/ipc/       跨平台 IPC 协议、Capability、路径权限和方法调度
 src/pe/        图标、版本资源、Payload Binding 和 Authenticode
 src/publish/   lwweb.json 解析、原子发布、压缩包、校验和与 Release 清单
 src/common/    文件、路径和 SHA-256 工具
+docs/          Payload 格式与 Native IPC 中英文专题文档
+examples/      可直接打包的项目配置与 Native IPC 示例
 tests/         单元测试与打包/读取集成测试
 ```
 
