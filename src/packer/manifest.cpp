@@ -56,15 +56,16 @@ void ValidateManifest(const Manifest& manifest) {
       (!manifest.ipc.capabilities.empty() || !manifest.ipc.filesystem_roots.empty()))
     throw Error("Native IPC capabilities require ipc.enabled=true");
   static const std::set<std::string> supported_capabilities = {
-      "app.info", "dialog.directory", "dialog.file", "fs.exists", "fs.list", "fs.read",
-      "fs.mkdir", "fs.copy", "fs.move", "fs.trash", "fs.delete"};
+      "app.info", "app.paths", "dialog.directory", "dialog.file", "fs.exists", "fs.list", "fs.read",
+      "fs.mkdir", "fs.copy", "fs.move", "fs.trash", "fs.delete", "fs.watch", "window.control",
+      "app.lifecycle", "tray"};
   std::set<std::string> unique_capabilities;
   for (const auto& capability : manifest.ipc.capabilities) {
     if (!supported_capabilities.count(capability))
       throw Error("Unsupported Native IPC capability: " + capability +
-                  ". Supported names: app.info, dialog.directory, dialog.file, "
+                  ". Supported names: app.info, app.paths, dialog.directory, dialog.file, "
                   "fs.exists, fs.list, fs.read, fs.mkdir, fs.copy, fs.move, "
-                  "fs.trash, fs.delete");
+                  "fs.trash, fs.delete, fs.watch, window.control, app.lifecycle, tray");
     if (!unique_capabilities.insert(capability).second)
       throw Error("Duplicate Native IPC capability: " + capability);
   }

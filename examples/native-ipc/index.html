@@ -19,12 +19,22 @@
   <button id="open-file">选择本地文件</button>
   <button id="exists" disabled>检查目录</button>
   <button id="list" disabled>列出目录</button>
+  <button id="watch" disabled>监听文件变化</button>
+  <button id="unwatch" disabled>停止监听</button>
+  <button id="window-state">读取窗口状态</button>
+  <button id="window-hide">隐藏窗口</button>
+  <button id="window-show">显示并聚焦</button>
+  <button id="app-quit">退出应用</button>
+  <button id="tray-create">创建托盘</button>
+  <button id="tray-update">更新托盘</button>
+  <button id="tray-destroy">移除托盘</button>
   <a id="file-link">通过本地文件桥打开</a>
   <pre id="output">正在读取应用信息…</pre>
   <script>
     const output=document.querySelector('#output');
     const show=value=>output.textContent=JSON.stringify(value,null,2);
     let directory='';
+    let watcherId='';
     async function invoke(method,params){
       try{return await window.lw.invoke(method,params)}
       catch(error){show({code:error.code,message:error.message});throw error}
@@ -50,10 +60,53 @@
       directory=result.path;
       document.querySelector('#exists').disabled=false;
       document.querySelector('#list').disabled=false;
+      document.querySelector('#watch').disabled=false;
       show(result);
     };
     document.querySelector('#exists').onclick=()=>invoke('fs.exists',{path:directory}).then(show);
     document.querySelector('#list').onclick=()=>invoke('fs.list',{path:directory}).then(show);
+    window.lw.on('fs.changed', data => show({event:'fs.changed', data}));
+    document.querySelector('#watch').onclick=async()=>{
+      const result=await invoke('fs.watch',{path:directory,recursive:true,debounceMs:150});
+      watcherId=result.watcherId;
+      document.querySelector('#watch').disabled=true;
+      document.querySelector('#unwatch').disabled=false;
+      show(result);
+    };
+    document.querySelector('#unwatch').onclick=async()=>{
+      if(!watcherId) return;
+      const result=await invoke('fs.unwatch',{watcherId});
+      watcherId='';
+      document.querySelector('#watch').disabled=false;
+      document.querySelector('#unwatch').disabled=true;
+      show(result);
+    };
+    document.querySelector('#window-state').onclick=()=>invoke('window.getState').then(show);
+    document.querySelector('#window-hide').onclick=()=>invoke('window.hide').then(show);
+    document.querySelector('#window-show').onclick=async()=>{
+      await invoke('window.show');
+      show(await invoke('window.focus'));
+    };
+    document.querySelector('#app-quit').onclick=()=>invoke('app.quit').then(show);
+    document.querySelector('#tray-create').onclick=()=>invoke('tray.create',{
+      tooltip:'Native IPC 示例',
+      menu:[
+        {id:'show',label:'显示窗口'},
+        {type:'separator'},
+        {id:'quit',label:'退出应用'}
+      ]
+    }).then(show);
+    document.querySelector('#tray-update').onclick=()=>invoke('tray.update',{
+      tooltip:'Native IPC（运行中）',
+      menu:[{id:'show',label:'显示窗口',checked:true},{id:'quit',label:'退出应用'}]
+    }).then(show);
+    document.querySelector('#tray-destroy').onclick=()=>invoke('tray.destroy').then(show);
+    window.lw.on('tray.click', data => show({event:'tray.click', data}));
+    window.lw.on('tray.menu', async data => {
+      show({event:'tray.menu', data});
+      if(data.id==='show') await invoke('window.show');
+      if(data.id==='quit') await invoke('app.quit');
+    });
   </script>
 </body>
 </html>

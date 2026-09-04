@@ -222,6 +222,11 @@ struct PendingIpcResponse {
   IpcResponse response;
 };
 
+struct PendingIpcEvent {
+  std::string event;
+  nlohmann::json data;
+};
+
 void LogIpcResult(const Logger* logger, const std::string& method,
                   const IpcResponse& response) {
   if (!logger) return;
@@ -242,7 +247,14 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
                          std::function<void(const std::wstring&)> on_error,
                          std::function<void(bool)> on_fullscreen_changed,
                          const Logger* logger,
-                         std::shared_ptr<LocalFileGrantManager> file_grants) {
+                         std::shared_ptr<LocalFileGrantManager> file_grants,
+                         std::function<nlohmann::json()> get_window_state,
+                         std::function<void(const std::string&, const nlohmann::json&)>
+                             control_window,
+                         std::function<void()> request_quit,
+                         std::function<nlohmann::json(const nlohmann::json&)> tray_create,
+                         std::function<nlohmann::json(const nlohmann::json&)> tray_update,
+                         std::function<nlohmann::json()> tray_destroy) {
   window_ = window;
   url_ = url;
   local_origin_ = local_origin;
@@ -259,6 +271,22 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
       return ChooseFiles(window_, options);
     };
     services.trash_file = MoveFileToRecycleBin;
+    services.emit_event = [this](const std::string& event, const nlohmann::json& data) {
+      auto pending = std::make_unique<PendingIpcEvent>();
+      pending->event = event;
+      pending->data = data;
+      if (!PostMessageW(window_, kWebViewIpcEventMessage, 0,
+                        reinterpret_cast<LPARAM>(pending.get()))) {
+        return;
+      }
+      pending.release();
+    };
+    services.get_window_state = std::move(get_window_state);
+    services.control_window = std::move(control_window);
+    services.request_quit = std::move(request_quit);
+    services.tray_create = std::move(tray_create);
+    services.tray_update = std::move(tray_update);
+    services.tray_destroy = std::move(tray_destroy);
     services.file_grants = std::move(file_grants);
     ipc_dispatcher_ =
         std::make_shared<IpcDispatcher>(manifest_, std::move(services));
@@ -594,7 +622,24 @@ void WebViewHost::Resize() {
   controller_->put_Bounds(bounds);
 }
 
+bool WebViewHost::EmitIpcEvent(const std::string& event,
+                               const nlohmann::json& data) {
+  return ipc_dispatcher_ && ipc_dispatcher_->EmitEvent(event, data);
+}
+
 bool WebViewHost::HandleWindowMessage(UINT message, WPARAM, LPARAM lparam) {
+  if (message == kWebViewIpcEventMessage) {
+    std::unique_ptr<PendingIpcEvent> pending(
+        reinterpret_cast<PendingIpcEvent*>(lparam));
+    if (!pending || !webview_) return true;
+    try {
+      webview_->PostWebMessageAsJson(
+          Utf8ToWide(SerializeIpcEvent({pending->event, pending->data})).c_str());
+    } catch (const std::exception&) {
+      if (logger_) logger_->Warn("Dropped oversized or invalid Native IPC event");
+    }
+    return true;
+  }
   if (message != kWebViewIpcResponseMessage) return false;
   std::unique_ptr<PendingIpcResponse> pending(
       reinterpret_cast<PendingIpcResponse*>(lparam));

@@ -40,7 +40,7 @@ Linux graphical packager (Ubuntu 22.04):
 - The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
 - True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
 - An optional controlled backend proxy forwards same-origin `/__lw_proxy__/...` requests to one fixed legacy HTTP origin from the Manifest, without disabling WebView security; Windows and Linux share the same implementation.
-- Optional Native IPC exposes app information, system directory/file pickers, and permission-scoped filesystem operations to trusted local pages through the stable `window.lw.invoke()` API. A session Local File Bridge streams large local files over localhost HTTP. Both are disabled by default and authorized per method.
+- Optional Native IPC exposes app information, system directory/file pickers, permission-scoped filesystem operations, file watching, window control, application exit, and the Windows system tray to trusted local pages through the stable `window.lw.invoke()` API. A session Local File Bridge streams large local files over localhost HTTP. Both are disabled by default and authorized per method.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
 - Limits for entry count, individual file size, and total uncompressed size.
 - PNG/ICO application icons and complete Windows PE version metadata.
@@ -382,7 +382,7 @@ Additional options:
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
 - `--ipc`: enable Native IPC for a local package; URL mode cannot enable it.
-- `--ipc-capability`: repeat for each capability, such as `app.info`, `dialog.directory`, `dialog.file`, `fs.exists`, `fs.list`, `fs.read`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, or `fs.delete`.
+- `--ipc-capability`: repeat for each capability, such as `app.info`, `app.paths`, `dialog.directory`, `dialog.file`, `fs.exists`, `fs.list`, `fs.read`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, `fs.delete`, `fs.watch`, `window.control`, `app.lifecycle`, or `tray`.
 - `--ipc-root`: repeat for each fixed filesystem root; `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`, `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}` are supported.
 - `--no-spa`: disable SPA fallback.
 - `--windowed`: override the default and start the generated app in a normal window.
@@ -432,6 +432,7 @@ Package the [Native IPC example](examples/native-ipc/index.html):
 lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --title "Native IPC Example" --windowed --ipc `
   --ipc-capability app.info `
+  --ipc-capability app.paths `
   --ipc-capability dialog.directory `
   --ipc-capability dialog.file `
   --ipc-capability fs.exists `
@@ -441,7 +442,11 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
   --ipc-capability fs.trash `
-  --ipc-capability fs.delete
+  --ipc-capability fs.delete `
+  --ipc-capability fs.watch `
+  --ipc-capability window.control `
+  --ipc-capability app.lifecycle `
+  --ipc-capability tray
 ```
 
 Directory selection creates a process-local Session Grant. The Local File Bridge uses
@@ -475,7 +480,8 @@ recovered from the system Trash. If permanent deletion is unnecessary, omit
 
 See the **[complete Native IPC guide](docs/native-ipc_EN.md)** for capabilities,
 parameters, results, errors, security boundaries, and File Bridge examples. A
-[Chinese guide](docs/native-ipc.md), the [basic example](examples/native-ipc/index.html),
+[Desktop Integration design](docs/desktop-integration_EN.md), [Chinese guide](docs/native-ipc.md),
+the [basic example](examples/native-ipc/index.html),
 and the [photo-selection demo](examples/photo-selector/index.html) are also available.
 
 ## Payload V2 Format
@@ -588,7 +594,7 @@ Next priorities are AppImage evaluation and an external-link policy, followed by
 Other planned improvements:
 
 - Multi-resolution icon generation
-- Tray support, activating the existing window on a second launch, and always-on-top windows
+- Activating the existing window on a second launch
 - External-link policy
 - Custom user agents, startup arguments, and CSP
 

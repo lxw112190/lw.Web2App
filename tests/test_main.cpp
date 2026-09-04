@@ -8,6 +8,7 @@
 void RunCliTests();
 void RunFilesystemAccessTests();
 void RunIpcTests();
+void RunSystemPathsTests();
 void RunLocalFileBridgeTests();
 void RunPayloadBindingTests();
 void RunPayloadTests();
@@ -80,6 +81,7 @@ int main(int argc, char** argv) {
     RunCliTests();
     RunFilesystemAccessTests();
     RunIpcTests();
+    RunSystemPathsTests();
     RunLocalFileBridgeTests();
     RunPayloadBindingTests();
     RunPayloadTests();

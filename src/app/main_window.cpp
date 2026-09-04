@@ -363,18 +363,23 @@ struct IpcCapabilityControl {
   const char* capability;
 };
 
-constexpr std::array<IpcCapabilityControl, 11> kIpcCapabilityControls{{
+constexpr std::array<IpcCapabilityControl, 16> kIpcCapabilityControls{{
     {kIpcCapabilityFirst + 0, L"获取应用信息", "app.info"},
-    {kIpcCapabilityFirst + 1, L"选择本地文件", "dialog.file"},
-    {kIpcCapabilityFirst + 2, L"选择本地文件夹", "dialog.directory"},
-    {kIpcCapabilityFirst + 3, L"检查文件是否存在", "fs.exists"},
-    {kIpcCapabilityFirst + 4, L"浏览文件夹内容", "fs.list"},
-    {kIpcCapabilityFirst + 5, L"预览授权文件", "fs.read"},
-    {kIpcCapabilityFirst + 6, L"创建文件夹", "fs.mkdir"},
-    {kIpcCapabilityFirst + 7, L"复制文件", "fs.copy"},
-    {kIpcCapabilityFirst + 8, L"移动文件", "fs.move"},
-    {kIpcCapabilityFirst + 9, L"移入回收站（推荐）", "fs.trash"},
-    {kIpcCapabilityFirst + 10, L"永久删除（高风险）", "fs.delete"},
+    {kIpcCapabilityFirst + 1, L"获取系统目录", "app.paths"},
+    {kIpcCapabilityFirst + 2, L"选择本地文件", "dialog.file"},
+    {kIpcCapabilityFirst + 3, L"选择本地文件夹", "dialog.directory"},
+    {kIpcCapabilityFirst + 4, L"检查文件是否存在", "fs.exists"},
+    {kIpcCapabilityFirst + 5, L"浏览文件夹内容", "fs.list"},
+    {kIpcCapabilityFirst + 6, L"预览授权文件", "fs.read"},
+    {kIpcCapabilityFirst + 7, L"创建文件夹", "fs.mkdir"},
+    {kIpcCapabilityFirst + 8, L"复制文件", "fs.copy"},
+    {kIpcCapabilityFirst + 9, L"移动文件", "fs.move"},
+    {kIpcCapabilityFirst + 10, L"移入回收站（推荐）", "fs.trash"},
+    {kIpcCapabilityFirst + 11, L"永久删除（高风险）", "fs.delete"},
+    {kIpcCapabilityFirst + 12, L"监听文件变化", "fs.watch"},
+    {kIpcCapabilityFirst + 13, L"控制应用窗口", "window.control"},
+    {kIpcCapabilityFirst + 14, L"允许应用退出", "app.lifecycle"},
+    {kIpcCapabilityFirst + 15, L"系统托盘", "tray"},
 }};
 
 // Native IPC 权限弹窗的临时状态。只有点击“保存”后才会回写主窗口，
@@ -467,8 +472,9 @@ void BuildIpcSettingsInterface(IpcDialogState& state) {
                       24, 130, 120, 22, 0, state.body_font);
   for (std::size_t index = 0; index < kIpcCapabilityControls.size(); ++index) {
     const auto& item = kIpcCapabilityControls[index];
-    const int column = static_cast<int>(index / 4);
-    const int row = static_cast<int>(index % 4);
+    // Keep the fixed-width dialog within bounds; the tray capability occupies the sixth row.
+    const int column = static_cast<int>(index % 3);
+    const int row = static_cast<int>(index / 3);
     AddIpcDialogControl(state, L"BUTTON", item.label,
                         WS_TABSTOP | BS_AUTOCHECKBOX,
                         32 + column * 214, 158 + row * 32, 205, 24,
@@ -476,24 +482,24 @@ void BuildIpcSettingsInterface(IpcDialogState& state) {
   }
 
   AddIpcDialogControl(state, L"STATIC", L"固定授权目录（可选，最多 32 个）",
-                      SS_LEFT | SS_NOPREFIX, 24, 300, 300, 22, 0,
+                      SS_LEFT | SS_NOPREFIX, 24, 360, 300, 22, 0,
                       state.body_font);
   AddIpcDialogControl(
       state, L"LISTBOX", L"",
       WS_TABSTOP | WS_VSCROLL | LBS_NOTIFY | LBS_NOINTEGRALHEIGHT,
-      24, 328, 522, 132, kIpcRootList, state.body_font, WS_EX_CLIENTEDGE);
+      24, 388, 522, 132, kIpcRootList, state.body_font, WS_EX_CLIENTEDGE);
   AddIpcDialogControl(state, L"BUTTON", L"添加目录", WS_TABSTOP,
-                      560, 328, 126, 34, kIpcAddRoot, state.body_font);
+                      560, 388, 126, 34, kIpcAddRoot, state.body_font);
   AddIpcDialogControl(state, L"BUTTON", L"移除所选", WS_TABSTOP,
-                      560, 372, 126, 34, kIpcRemoveRoot, state.body_font);
+                      560, 432, 126, 34, kIpcRemoveRoot, state.body_font);
   AddIpcDialogControl(
       state, L"STATIC",
       L"安全提示：固定目录会授予网页持续访问权限；删除、移动等写操作请按最小权限开启。",
-      SS_LEFT | SS_NOPREFIX, 24, 478, 662, 38, 0, state.small_font);
+      SS_LEFT | SS_NOPREFIX, 24, 538, 662, 38, 0, state.small_font);
   AddIpcDialogControl(state, L"BUTTON", L"保存", WS_TABSTOP | BS_DEFPUSHBUTTON,
-                      454, 526, 110, 36, IDOK, state.body_font);
+                      454, 592, 110, 36, IDOK, state.body_font);
   AddIpcDialogControl(state, L"BUTTON", L"取消", WS_TABSTOP,
-                      576, 526, 110, 36, IDCANCEL, state.body_font);
+                      576, 592, 110, 36, IDCANCEL, state.body_font);
   SetIpcDialogPreset(state.window, state.capabilities);
   RefreshIpcRootList(state);
 }
@@ -524,7 +530,10 @@ LRESULT CALLBACK IpcSettingsWindowProc(HWND window, UINT message,
         case kIpcPresetManage: {
           std::vector<std::string> all;
           for (const auto& item : kIpcCapabilityControls)
-            if (std::strcmp(item.capability, "fs.delete") != 0)
+            if (std::strcmp(item.capability, "fs.delete") != 0 &&
+                std::strcmp(item.capability, "window.control") != 0 &&
+                std::strcmp(item.capability, "app.lifecycle") != 0 &&
+                std::strcmp(item.capability, "tray") != 0)
               all.emplace_back(item.capability);
           SetIpcDialogPreset(window, all);
           return 0;
@@ -626,7 +635,7 @@ bool ShowIpcSettings(HWND owner, State& owner_state) {
   dialog_state.roots = owner_state.ipc_filesystem_roots;
   constexpr DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
   constexpr DWORD extended_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  RECT bounds{0, 0, Scale(712, dialog_state.dpi), Scale(588, dialog_state.dpi)};
+  RECT bounds{0, 0, Scale(712, dialog_state.dpi), Scale(672, dialog_state.dpi)};
   AdjustWindowRectExForDpi(&bounds, style, FALSE, extended_style,
                            dialog_state.dpi);
   RECT parent{};

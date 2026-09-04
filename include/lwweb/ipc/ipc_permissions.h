@@ -1,7 +1,6 @@
 #pragma once
 
 #include "lwweb/packer/manifest.h"
-
 #include <filesystem>
 #include <mutex>
 #include <string>

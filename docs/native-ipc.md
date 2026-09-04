@@ -28,7 +28,10 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
   --ipc-capability fs.trash `
-  --ipc-capability fs.delete
+  --ipc-capability fs.delete `
+  --ipc-capability window.control `
+  --ipc-capability app.lifecycle `
+  --ipc-capability tray
 ```
 
 网页端不需要引入额外 JavaScript 文件：
@@ -55,6 +58,8 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
 `window.lw.invoke(method, params)` 返回 Promise。Native 操作失败时 Promise 会被拒绝，
 错误对象包含稳定的 `code` 和便于阅读的 `message`。
 
+事件通道和 `app.getPath` 的设计说明请参阅 [Desktop Integration](desktop-integration.md)。
+
 ## 权限配置
 
 启用 IPC 不等于授予所有能力。每一类方法都必须在打包时单独声明：
@@ -62,6 +67,7 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
 | Capability | 方法 | 用途 |
 | --- | --- | --- |
 | `app.info` | `app.getInfo` | 获取应用 ID、标题、平台、架构和 Runtime 版本 |
+| `app.paths` | `app.getPath` | 解析受支持的系统目录（不会自动授予文件权限） |
 | `dialog.directory` | `dialog.selectDirectory` | 打开系统目录选择器，并创建会话目录授权 |
 | `dialog.file` | `dialog.openFile`、`file.revoke` | 选择本地文件并管理只读 File Grant |
 | `fs.exists` | `fs.exists` | 检查授权路径是否存在 |
@@ -72,6 +78,10 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
 | `fs.move` | `fs.move` | 移动普通文件或同文件系统目录 |
 | `fs.trash` | `fs.trash` | 将授权普通文件移入系统回收站/Trash |
 | `fs.delete` | `fs.delete` | 永久删除授权路径（高风险） |
+| `fs.watch` | `fs.watch`、`fs.unwatch` | 监听授权目录的变化提示 |
+| `window.control` | `window.getState`、`window.show`、`window.hide`、`window.minimize`、`window.maximize`、`window.restore`、`window.focus`、`window.setAlwaysOnTop`、`window.setCloseBehavior` | 控制当前应用窗口 |
+| `app.lifecycle` | `app.quit` | 请求 Runtime 安全退出 |
+| `tray` | `tray.create`、`tray.update`、`tray.destroy` | Windows 系统托盘图标和菜单（Linux 暂不支持） |
 
 固定文件系统根目录使用可重复的 `--ipc-root` 指定：
 

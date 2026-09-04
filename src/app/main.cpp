@@ -5,6 +5,7 @@
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
+#include "lwweb/ipc/ipc_message.h"
 #include "lwweb/packer/packer.h"
 #include "lwweb/packer/payload.h"
 #include "lwweb/pe/pe_resources.h"
@@ -18,9 +19,11 @@
 #include <shellapi.h>
 
 #include <cstdio>
+#include <cwchar>
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace lwweb {
@@ -35,10 +38,161 @@ struct RuntimeState {
   std::unique_ptr<ResourceServer> server;
   std::unique_ptr<WebViewHost> webview;
   bool fullscreen = false;
+  std::string close_behavior = "exit";
+  bool tray_created = false;
+  NOTIFYICONDATAW tray_icon{sizeof(NOTIFYICONDATAW)};
+  UINT taskbar_created_message = 0;
+  std::vector<nlohmann::json> tray_menu;
+  std::function<void(const std::string&, const nlohmann::json&)> emit_event;
   DWORD windowed_style = 0;
   DWORD windowed_ex_style = 0;
   WINDOWPLACEMENT windowed_placement{sizeof(WINDOWPLACEMENT)};
 };
+
+constexpr UINT kRuntimeTrayMessage = WM_APP + 0x4a4;
+constexpr UINT kRuntimeTrayCommandFirst = 0x6200;
+
+void UpdateTrayModel(RuntimeState& state, const nlohmann::json& params) {
+  state.tray_menu.clear();
+  if (const auto menu = params.find("menu"); menu != params.end())
+    for (const auto& item : *menu) state.tray_menu.push_back(item);
+}
+
+void UpdateTrayTooltip(RuntimeState& state, const nlohmann::json& params) {
+  const auto tooltip = params.value("tooltip", std::string("lw.Web2App"));
+  const auto wide = Utf8ToWide(tooltip);
+  std::wcsncpy(state.tray_icon.szTip, wide.c_str(),
+               (sizeof(state.tray_icon.szTip) / sizeof(wchar_t)) - 1);
+  state.tray_icon.szTip[(sizeof(state.tray_icon.szTip) / sizeof(wchar_t)) - 1] = L'\0';
+}
+
+nlohmann::json CreateTray(HWND window, HINSTANCE instance, RuntimeState& state,
+                          const nlohmann::json& params) {
+  if (state.tray_created) {
+    state.tray_menu.clear();
+    UpdateTrayModel(state, params);
+    UpdateTrayTooltip(state, params);
+    state.tray_icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    if (!Shell_NotifyIconW(NIM_MODIFY, &state.tray_icon))
+      throw IpcException("IO_ERROR", "Cannot update the system tray icon");
+    return {{"created", true}, {"updated", true}};
+  }
+  state.tray_icon = NOTIFYICONDATAW{sizeof(NOTIFYICONDATAW)};
+  state.tray_icon.hWnd = window;
+  state.tray_icon.uID = 1;
+  state.tray_icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+  state.tray_icon.uCallbackMessage = kRuntimeTrayMessage;
+  state.tray_icon.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(1));
+  UpdateTrayTooltip(state, params);
+  UpdateTrayModel(state, params);
+  if (!Shell_NotifyIconW(NIM_ADD, &state.tray_icon))
+    throw IpcException("IO_ERROR", "Cannot create the system tray icon");
+  state.tray_created = true;
+  return {{"created", true}};
+}
+
+nlohmann::json UpdateTray(RuntimeState& state, const nlohmann::json& params) {
+  if (!state.tray_created)
+    throw IpcException("INVALID_STATE", "Create the system tray before updating it");
+  UpdateTrayModel(state, params);
+  UpdateTrayTooltip(state, params);
+  state.tray_icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+  if (!Shell_NotifyIconW(NIM_MODIFY, &state.tray_icon))
+    throw IpcException("IO_ERROR", "Cannot update the system tray icon");
+  return {{"updated", true}};
+}
+
+nlohmann::json DestroyTray(RuntimeState& state) {
+  if (!state.tray_created) return {{"destroyed", false}};
+  Shell_NotifyIconW(NIM_DELETE, &state.tray_icon);
+  state.tray_created = false;
+  state.tray_menu.clear();
+  return {{"destroyed", true}};
+}
+
+void EmitTrayEvent(RuntimeState& state, const std::string& event,
+                   const nlohmann::json& data) {
+  if (state.emit_event) (void)state.emit_event(event, data);
+}
+
+void ShowTrayMenu(HWND window, RuntimeState& state) {
+  if (!state.tray_created) return;
+  const auto menu = CreatePopupMenu();
+  if (!menu) return;
+  std::unordered_map<UINT, std::string> command_ids;
+  UINT command = kRuntimeTrayCommandFirst;
+  for (const auto& item : state.tray_menu) {
+    if (item.value("type", "") == "separator") {
+      AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+      continue;
+    }
+    const auto id = command++;
+    command_ids.emplace(id, item.value("id", ""));
+    UINT flags = MF_STRING;
+    if (!item.value("enabled", true)) flags |= MF_GRAYED;
+    if (item.value("checked", false)) flags |= MF_CHECKED;
+    const auto label = Utf8ToWide(item.value("label", ""));
+    AppendMenuW(menu, flags, id, label.c_str());
+  }
+  POINT point{};
+  GetCursorPos(&point);
+  SetForegroundWindow(window);
+  const auto selected = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY,
+                                       point.x, point.y, 0, window, nullptr);
+  DestroyMenu(menu);
+  const auto found = command_ids.find(selected);
+  if (found != command_ids.end()) EmitTrayEvent(state, "tray.menu", {{"id", found->second}});
+}
+
+void HandleTrayMessage(HWND window, RuntimeState& state, LPARAM lparam) {
+  switch (static_cast<UINT>(lparam)) {
+    case WM_LBUTTONUP:
+      EmitTrayEvent(state, "tray.click", {{"button", "left"}, {"clicks", 1}});
+      break;
+    case WM_LBUTTONDBLCLK:
+      EmitTrayEvent(state, "tray.click", {{"button", "left"}, {"clicks", 2}});
+      break;
+    case WM_RBUTTONUP:
+      ShowTrayMenu(window, state);
+      break;
+  }
+}
+
+nlohmann::json WindowState(HWND window, const RuntimeState& state) {
+  const auto ex_style = static_cast<DWORD>(GetWindowLongPtrW(window, GWL_EXSTYLE));
+  return {{"visible", IsWindowVisible(window) != FALSE},
+          {"minimized", IsIconic(window) != FALSE},
+          {"maximized", IsZoomed(window) != FALSE},
+          {"fullscreen", state.fullscreen},
+          {"alwaysOnTop", (ex_style & WS_EX_TOPMOST) != 0},
+          {"closeBehavior", state.close_behavior}};
+}
+
+void ControlWindow(HWND window, RuntimeState& state, const std::string& method,
+                   const nlohmann::json& params) {
+  if (method == "window.show") {
+    ShowWindow(window, SW_SHOW);
+  } else if (method == "window.hide") {
+    ShowWindow(window, SW_HIDE);
+  } else if (method == "window.minimize") {
+    ShowWindow(window, SW_MINIMIZE);
+  } else if (method == "window.maximize") {
+    ShowWindow(window, SW_MAXIMIZE);
+  } else if (method == "window.restore") {
+    ShowWindow(window, SW_RESTORE);
+  } else if (method == "window.focus") {
+    ShowWindow(window, SW_SHOW);
+    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+    SetForegroundWindow(window);
+    SetFocus(window);
+  } else if (method == "window.setAlwaysOnTop") {
+    const bool enabled = params.at("enabled").get<bool>();
+    SetWindowPos(window, enabled ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  } else if (method == "window.setCloseBehavior") {
+    state.close_behavior = params.at("behavior").get<std::string>();
+  }
+}
 
 void SetFullscreen(HWND window, RuntimeState& state, bool fullscreen) {
   if (state.fullscreen == fullscreen) return;
@@ -91,8 +245,26 @@ LRESULT CALLBACK RuntimeProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
       return 0;
     }
   }
+  if (message == WM_CLOSE && state && state->close_behavior == "hide") {
+    ShowWindow(window, SW_HIDE);
+    return 0;
+  }
+  if (message == kRuntimeQuitMessage) {
+    DestroyWindow(window);
+    return 0;
+  }
+  if (state && message == kRuntimeTrayMessage) {
+    HandleTrayMessage(window, *state, lparam);
+    return 0;
+  }
+  if (state && state->taskbar_created_message != 0 &&
+      message == state->taskbar_created_message && state->tray_created) {
+    Shell_NotifyIconW(NIM_ADD, &state->tray_icon);
+    return 0;
+  }
   if (message == WM_DESTROY) {
     if (state) {
+      DestroyTray(*state);
       delete state;
       SetWindowLongPtrW(window, GWLP_USERDATA, 0);
     }
@@ -164,6 +336,10 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
     throw Error("Cannot create runtime window");
   }
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+  state->taskbar_created_message = RegisterWindowMessageW(L"TaskbarCreated");
+  state->emit_event = [state](const std::string& event, const nlohmann::json& data) {
+    if (state->webview) (void)state->webview->EmitIpcEvent(event, data);
+  };
   state->webview = std::make_unique<WebViewHost>();
   try {
     state->webview->Create(
@@ -173,7 +349,17 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
           DestroyWindow(window);
         },
         [window, state](bool fullscreen) { SetFullscreen(window, *state, fullscreen); },
-        &state->logger, state->file_grants);
+        &state->logger, state->file_grants,
+        [window, state] { return WindowState(window, *state); },
+        [window, state](const std::string& method, const nlohmann::json& params) {
+          ControlWindow(window, *state, method, params);
+        },
+        [window] { PostMessageW(window, kRuntimeQuitMessage, 0, 0); },
+        [window, instance, state](const nlohmann::json& params) {
+          return CreateTray(window, instance, *state, params);
+        },
+        [state](const nlohmann::json& params) { return UpdateTray(*state, params); },
+        [state] { return DestroyTray(*state); });
   } catch (...) {
     SetWindowLongPtrW(window, GWLP_USERDATA, 0);
     DestroyWindow(window);

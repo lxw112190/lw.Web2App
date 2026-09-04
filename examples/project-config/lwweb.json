@@ -25,6 +25,7 @@
       "enabled": true,
       "capabilities": [
         "app.info",
+        "app.paths",
         "dialog.directory",
         "dialog.file",
         "fs.exists",
@@ -34,7 +35,11 @@
         "fs.copy",
         "fs.move",
         "fs.trash",
-        "fs.delete"
+        "fs.delete",
+        "fs.watch",
+        "window.control",
+        "app.lifecycle",
+        "tray"
       ],
       "filesystem_roots": []
     }

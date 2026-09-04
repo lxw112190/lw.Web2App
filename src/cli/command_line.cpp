@@ -174,7 +174,9 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "             [--width 1280] [--height 800] [--app-id com.example.app]\n"
        << "             [--no-spa] [--windowed] [--no-log | --debug-log] [--devtools]\n"
        << "             [--backend-origin http://host:port]\n"
-       << "             [--ipc --ipc-capability app.info --ipc-root ${DOCUMENTS}]\n"
+       << "             [--ipc --ipc-capability app.info --ipc-capability app.paths]\n"
+       << "             [--ipc-capability fs.watch --ipc-capability window.control]\n"
+       << "             [--ipc-capability app.lifecycle --ipc-capability tray]\n"
        << "             [--product-name App] [--file-description Description]\n"
        << "             [--icon app.png] [--company Company] [--version 1.0.0.0]\n"
        << "             [--copyright Copyright]\n";

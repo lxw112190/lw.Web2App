@@ -109,9 +109,67 @@ struct RuntimeState {
   std::string local_origin;
   std::string ipc_transport_token;
   bool fullscreen = false;
+  bool always_on_top = false;
+  std::string close_behavior = "exit";
 };
 
 void OnRuntimeDestroy(GtkWidget*, gpointer) { gtk_main_quit(); }
+
+gboolean OnRuntimeDelete(GtkWidget* window, GdkEvent*, gpointer data) {
+  auto* state = static_cast<RuntimeState*>(data);
+  if (state && state->close_behavior == "hide") {
+    gtk_widget_hide(window);
+    return TRUE;
+  }
+  return FALSE;
+}
+
+gboolean QuitRuntime(gpointer data) {
+  gtk_widget_destroy(GTK_WIDGET(data));
+  return G_SOURCE_REMOVE;
+}
+
+nlohmann::json WindowState(GtkWidget* window, const RuntimeState& state) {
+  bool minimized = false;
+  bool maximized = false;
+  if (auto* native = gtk_widget_get_window(window)) {
+    const auto flags = gdk_window_get_state(native);
+    minimized = (flags & GDK_WINDOW_STATE_ICONIFIED) != 0;
+    maximized = (flags & GDK_WINDOW_STATE_MAXIMIZED) != 0;
+  }
+  return {{"visible", gtk_widget_get_visible(window) != FALSE},
+          {"minimized", minimized},
+          {"maximized", maximized},
+          {"fullscreen", state.fullscreen},
+          {"alwaysOnTop", state.always_on_top},
+          {"closeBehavior", state.close_behavior}};
+}
+
+void ControlWindow(GtkWidget* window, RuntimeState& state, const std::string& method,
+                   const nlohmann::json& params) {
+  auto* native = GTK_WINDOW(window);
+  if (method == "window.show") {
+    gtk_widget_show(window);
+  } else if (method == "window.hide") {
+    gtk_widget_hide(window);
+  } else if (method == "window.minimize") {
+    gtk_window_iconify(native);
+  } else if (method == "window.maximize") {
+    gtk_window_maximize(native);
+  } else if (method == "window.restore") {
+    gtk_window_deiconify(native);
+    gtk_window_unmaximize(native);
+  } else if (method == "window.focus") {
+    gtk_widget_show(window);
+    gtk_window_deiconify(native);
+    gtk_window_present(native);
+  } else if (method == "window.setAlwaysOnTop") {
+    state.always_on_top = params.at("enabled").get<bool>();
+    gtk_window_set_keep_above(native, state.always_on_top);
+  } else if (method == "window.setCloseBehavior") {
+    state.close_behavior = params.at("behavior").get<std::string>();
+  }
+}
 
 gboolean OnRuntimeKey(GtkWidget* window, GdkEventKey* event, gpointer data) {
   auto* state = static_cast<RuntimeState*>(data);
@@ -169,6 +227,13 @@ void SendIpcResponse(WebKitWebView* view, const IpcResponse& response) {
   webkit_web_view_run_javascript(view, script.c_str(), nullptr, nullptr, nullptr);
 }
 
+void SendIpcEvent(WebKitWebView* view, const std::string& event,
+                  const nlohmann::json& data) {
+  const auto script = "window.__lwIpcReceive&&window.__lwIpcReceive(" +
+                      SerializeIpcEvent({event, data}) + ")";
+  webkit_web_view_run_javascript(view, script.c_str(), nullptr, nullptr, nullptr);
+}
+
 struct LinuxIpcResponse {
   WebKitWebView* view = nullptr;
   std::shared_ptr<IpcDispatcher> dispatcher;
@@ -176,6 +241,23 @@ struct LinuxIpcResponse {
   std::string method;
   IpcResponse response;
 };
+
+struct LinuxIpcEvent {
+  WebKitWebView* view = nullptr;
+  std::string event;
+  nlohmann::json data;
+};
+
+gboolean ApplyIpcEvent(gpointer data) {
+  std::unique_ptr<LinuxIpcEvent> pending(static_cast<LinuxIpcEvent*>(data));
+  try {
+    SendIpcEvent(pending->view, pending->event, pending->data);
+  } catch (const std::exception&) {
+    // Event delivery is deliberately best effort; malformed/oversized data is dropped.
+  }
+  g_object_unref(pending->view);
+  return G_SOURCE_REMOVE;
+}
 
 gboolean ApplyIpcResponse(gpointer data) {
   std::unique_ptr<LinuxIpcResponse> pending(static_cast<LinuxIpcResponse*>(data));
@@ -502,12 +584,23 @@ int RunPayloadApp(const LoadedPayload& payload) {
       return ChooseIpcFiles(window, options);
     };
     services.trash_file = MoveFileToTrash;
+    services.get_window_state = [window, &state] { return WindowState(window, state); };
+    services.control_window = [window, &state](const std::string& method,
+                                               const nlohmann::json& params) {
+      ControlWindow(window, state, method, params);
+    };
+    services.request_quit = [window] { g_idle_add(QuitRuntime, window); };
+    services.emit_event = [view](const std::string& event, const nlohmann::json& data) {
+      auto* pending = new LinuxIpcEvent{WEBKIT_WEB_VIEW(g_object_ref(view)), event, data};
+      g_idle_add(ApplyIpcEvent, pending);
+    };
     services.file_grants = file_grants;
     state.ipc_dispatcher =
         std::make_shared<IpcDispatcher>(payload.manifest, std::move(services));
     logger.Info("Native IPC bridge enabled");
   }
   g_signal_connect(window, "destroy", G_CALLBACK(OnRuntimeDestroy), nullptr);
+  g_signal_connect(window, "delete-event", G_CALLBACK(OnRuntimeDelete), &state);
   g_signal_connect(window, "key-press-event", G_CALLBACK(OnRuntimeKey), &state);
   g_signal_connect(view, "load-changed", G_CALLBACK(OnLoadChanged), &state);
   g_signal_connect(view, "load-failed", G_CALLBACK(OnLoadFailed), &state);

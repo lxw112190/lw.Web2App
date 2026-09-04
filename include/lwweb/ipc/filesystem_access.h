@@ -27,6 +27,7 @@ class IpcFilesystemAccess {
       std::shared_ptr<IpcFilesystemPermissions> permissions);
 
   void GrantDirectory(const std::filesystem::path& directory);
+  std::filesystem::path WatchDirectory(const nlohmann::json& params) const;
   std::filesystem::path OpenReadPath(const nlohmann::json& params) const;
   std::filesystem::path TrashPath(const nlohmann::json& params) const;
   nlohmann::json Exists(const nlohmann::json& params) const;

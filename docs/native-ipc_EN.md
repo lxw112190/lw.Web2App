@@ -31,7 +31,10 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
   --ipc-capability fs.trash `
-  --ipc-capability fs.delete
+  --ipc-capability fs.delete `
+  --ipc-capability window.control `
+  --ipc-capability app.lifecycle `
+  --ipc-capability tray
 ```
 
 No additional JavaScript file is required:
@@ -58,6 +61,8 @@ No additional JavaScript file is required:
 `window.lw.invoke(method, params)` returns a Promise. Rejections contain a stable
 `code` and a human-readable `message`.
 
+See [Desktop Integration](desktop-integration_EN.md) for the event channel and `app.getPath`.
+
 ## Permissions
 
 Enabling IPC does not grant every method. Capabilities are declared at package time:
@@ -65,6 +70,7 @@ Enabling IPC does not grant every method. Capabilities are declared at package t
 | Capability | Methods | Purpose |
 | --- | --- | --- |
 | `app.info` | `app.getInfo` | Read app ID, title, platform, architecture, and Runtime version |
+| `app.paths` | `app.getPath` | Resolve supported system directories; this does not grant file access |
 | `dialog.directory` | `dialog.selectDirectory` | Open the directory picker and create a Session Grant |
 | `dialog.file` | `dialog.openFile`, `file.revoke` | Select files and manage read-only File Grants |
 | `fs.exists` | `fs.exists` | Check an authorized path |
@@ -75,6 +81,10 @@ Enabling IPC does not grant every method. Capabilities are declared at package t
 | `fs.move` | `fs.move` | Move a regular file or a same-filesystem directory |
 | `fs.trash` | `fs.trash` | Move an authorized regular file to the system Trash/Recycle Bin |
 | `fs.delete` | `fs.delete` | Permanently delete an authorized path (high risk) |
+| `fs.watch` | `fs.watch`, `fs.unwatch` | Watch an authorized directory for change hints |
+| `window.control` | `window.getState`, `window.show`, `window.hide`, `window.minimize`, `window.maximize`, `window.restore`, `window.focus`, `window.setAlwaysOnTop`, `window.setCloseBehavior` | Control the current application window |
+| `app.lifecycle` | `app.quit` | Request a safe Runtime shutdown |
+| `tray` | `tray.create`, `tray.update`, `tray.destroy` | Windows system tray icon and menu (not available on Linux yet) |
 
 Use repeatable `--ipc-root` options for fixed filesystem roots:
 

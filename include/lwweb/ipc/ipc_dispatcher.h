@@ -3,6 +3,7 @@
 #include "lwweb/ipc/filesystem_access.h"
 #include "lwweb/ipc/ipc_message.h"
 #include "lwweb/packer/manifest.h"
+#include "lwweb/runtime/file_watch.h"
 
 #include <filesystem>
 #include <functional>
@@ -39,6 +40,19 @@ struct IpcRuntimeServices {
   std::function<std::optional<std::vector<std::filesystem::path>>(
       const OpenFileDialogOptions&)> open_files;
   std::function<void(const std::filesystem::path&)> trash_file;
+  // 在 WebView UI 主线程发送尽力而为的 Native → Web 事件。
+  std::function<void(const std::string&, const nlohmann::json&)> emit_event;
+  // Window control callbacks are injected by the platform runtime and are
+  // called on its UI thread. The dispatcher only validates method parameters.
+  std::function<nlohmann::json()> get_window_state;
+  std::function<void(const std::string&, const nlohmann::json&)> control_window;
+  // Schedule runtime shutdown after the current IPC response is delivered.
+  std::function<void()> request_quit;
+  // System tray operations are implemented by the host platform. Parameters
+  // are validated by the dispatcher before reaching these callbacks.
+  std::function<nlohmann::json(const nlohmann::json&)> tray_create;
+  std::function<nlohmann::json(const nlohmann::json&)> tray_update;
+  std::function<nlohmann::json()> tray_destroy;
   std::shared_ptr<LocalFileGrantManager> file_grants;
 };
 
@@ -49,6 +63,8 @@ class IpcDispatcher {
   IpcDispatcher(Manifest manifest, IpcRuntimeServices services);
 
   IpcResponse Dispatch(const IpcRequest& request);
+  // Runtime 服务使用此接口投递事件；事件不会进入请求/响应 pending 表。
+  bool EmitEvent(const std::string& event, const nlohmann::json& data = {});
   IpcExecution ExecutionFor(const std::string& method) const;
   bool TryBegin(const std::string& id);
   void End(const std::string& id);
@@ -61,6 +77,7 @@ class IpcDispatcher {
   Manifest manifest_;
   IpcRuntimeServices services_;
   std::shared_ptr<IpcFilesystemAccess> filesystem_;
+  std::shared_ptr<FileWatchService> file_watch_;
   mutable std::mutex pending_mutex_;
   std::set<std::string> pending_ids_;
 };

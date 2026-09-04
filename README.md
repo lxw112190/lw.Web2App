@@ -40,7 +40,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
 - Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
 - 可选的受控后台代理把 `/__lw_proxy__/...` 同源请求转发到 Manifest 固定的传统 HTTP Origin，不需要关闭 WebView 安全策略，Windows 与 Linux 共用同一实现。
-- 可选 Native IPC 通过稳定的 `window.lw.invoke()` API 为可信本地页面提供应用信息、系统目录/文件选择和受权限约束的文件操作；Session Local File Bridge 通过 localhost HTTP 流式提供大型本地文件；默认关闭且按方法授权。
+- 可选 Native IPC 通过稳定的 `window.lw.invoke()` API 为可信本地页面提供应用信息、系统目录/文件选择、受权限约束的文件操作、文件变化监听、窗口控制、应用退出和 Windows 系统托盘；Session Local File Bridge 通过 localhost HTTP 流式提供大型本地文件；默认关闭且按方法授权。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
 - 拒绝绝对路径、盘符、`..`、NUL、重复 ZIP 路径。
 - 限制资源数量、单文件大小和总解压大小，降低 ZIP 炸弹风险。
@@ -389,7 +389,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
 - `--ipc`：为本地打包模式启用 Native IPC；在线 URL 模式禁止启用。
-- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`dialog.directory`、`dialog.file`、`fs.exists`、`fs.list`、`fs.read`、`fs.mkdir`、`fs.copy`、`fs.move`、`fs.trash`、`fs.delete`。
+- `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`app.paths`、`dialog.directory`、`dialog.file`、`fs.exists`、`fs.list`、`fs.read`、`fs.mkdir`、`fs.copy`、`fs.move`、`fs.trash`、`fs.delete`、`fs.watch`、`window.control`、`app.lifecycle`、`tray`。
 - `--ipc-root`：重复传入文件系统固定根目录；支持 `${HOME}`、`${DESKTOP}`、`${DOCUMENTS}`、`${PICTURES}`、`${DOWNLOADS}`、`${APP_DATA}`、`${APP_CACHE}`。
 - `--no-spa`：关闭 SPA fallback。
 - `--windowed`：覆盖默认行为，使生成应用以普通窗口启动。
@@ -438,6 +438,7 @@ const info = await window.lw.invoke("app.getInfo");
 lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --title "Native IPC 示例" --windowed --ipc `
   --ipc-capability app.info `
+  --ipc-capability app.paths `
   --ipc-capability dialog.directory `
   --ipc-capability dialog.file `
   --ipc-capability fs.exists `
@@ -447,7 +448,11 @@ lw.Web2App.exe pack .\examples\native-ipc .\native-ipc.exe `
   --ipc-capability fs.copy `
   --ipc-capability fs.move `
   --ipc-capability fs.trash `
-  --ipc-capability fs.delete
+  --ipc-capability fs.delete `
+  --ipc-capability fs.watch `
+  --ipc-capability window.control `
+  --ipc-capability app.lifecycle `
+  --ipc-capability tray
 ```
 
 系统目录选择会创建仅本次运行有效的 Session Grant；本地文件桥通过随机 File Grant
@@ -479,7 +484,8 @@ lw.Web2App.exe pack .\examples\photo-selector .\photo-selector.exe `
 
 完整的 Capability 表、参数、返回值、错误码、安全边界和文件桥示例见
 **[Native IPC 中文指南](docs/native-ipc.md)**；也可查看
-[English guide](docs/native-ipc_EN.md)、[基础示例](examples/native-ipc/index.html)和
+[Desktop Integration 设计说明](docs/desktop-integration.md)、[English guide](docs/native-ipc_EN.md)、
+[基础示例](examples/native-ipc/index.html)和
 [选片示例](examples/photo-selector/index.html)。
 
 ## Payload V2 格式
@@ -589,7 +595,7 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 其他后续方向：
 
 - 多分辨率图标生成
-- 托盘、第二次启动时前置已有窗口和窗口置顶
+- 第二次启动时前置已有窗口
 - 外部链接策略
 - 自定义 User-Agent、启动参数和 CSP
 

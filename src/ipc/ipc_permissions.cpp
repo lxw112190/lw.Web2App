@@ -4,6 +4,7 @@
 #include "lwweb/common/http_origin.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/ipc/ipc_message.h"
+#include "lwweb/runtime/system_paths.h"
 
 #include <algorithm>
 #include <cctype>
@@ -11,75 +12,20 @@
 #include <cwctype>
 #include <map>
 
-#ifdef _WIN32
-#include <ShlObj.h>
-#endif
 
 namespace lwweb {
 namespace {
 
-std::filesystem::path EnvironmentPath(const char* name) {
-  const auto* value = std::getenv(name);
-  return value && *value ? std::filesystem::u8path(value) : std::filesystem::path{};
-}
-
-std::filesystem::path HomePath() {
-#ifdef _WIN32
-  auto home = EnvironmentPath("USERPROFILE");
-#else
-  auto home = EnvironmentPath("HOME");
-#endif
-  return home;
-}
-
-#ifdef _WIN32
-std::filesystem::path KnownFolder(REFKNOWNFOLDERID id,
-                                  const std::filesystem::path& fallback) {
-  PWSTR value = nullptr;
-  if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, nullptr, &value)) && value) {
-    std::filesystem::path result(value);
-    CoTaskMemFree(value);
-    return result;
-  }
-  if (value) CoTaskMemFree(value);
-  return fallback;
-}
-#endif
-
 std::filesystem::path ExpandRoot(const std::string& value, const std::string& app_id) {
-  const auto home = HomePath();
-  std::filesystem::path app_data;
-  std::filesystem::path app_cache;
-#ifdef _WIN32
-  const auto local = KnownFolder(FOLDERID_LocalAppData, LocalAppDataRoot());
-  app_data = local / "lw.Web2App" / "apps" / std::filesystem::u8path(app_id) / "data";
-  app_cache = local / "lw.Web2App" / "apps" / std::filesystem::u8path(app_id) / "cache";
-  const auto desktop = KnownFolder(FOLDERID_Desktop, home / "Desktop");
-  const auto documents = KnownFolder(FOLDERID_Documents, home / "Documents");
-  const auto pictures = KnownFolder(FOLDERID_Pictures, home / "Pictures");
-  const auto downloads = KnownFolder(FOLDERID_Downloads, home / "Downloads");
-#else
-  const auto data_home = EnvironmentPath("XDG_DATA_HOME").empty()
-                             ? home / ".local" / "share"
-                             : EnvironmentPath("XDG_DATA_HOME");
-  const auto cache_home = EnvironmentPath("XDG_CACHE_HOME").empty()
-                              ? home / ".cache"
-                              : EnvironmentPath("XDG_CACHE_HOME");
-  app_data = data_home / "lw.Web2App" / "apps" / app_id / "data";
-  app_cache = cache_home / "lw.Web2App" / "apps" / app_id / "cache";
-  const auto desktop = home / "Desktop";
-  const auto documents = home / "Documents";
-  const auto pictures = home / "Pictures";
-  const auto downloads = home / "Downloads";
-#endif
+  const auto home = SystemPaths::Resolve("home", app_id);
   const std::map<std::string, std::filesystem::path> variables = {
       {"${HOME}", home},
-      {"${DESKTOP}", desktop},
-      {"${DOCUMENTS}", documents},
-      {"${PICTURES}", pictures},
-      {"${DOWNLOADS}", downloads},
-      {"${APP_DATA}", app_data},
-      {"${APP_CACHE}", app_cache}};
+      {"${DESKTOP}", SystemPaths::Resolve("desktop", app_id)},
+      {"${DOCUMENTS}", SystemPaths::Resolve("documents", app_id)},
+      {"${PICTURES}", SystemPaths::Resolve("pictures", app_id)},
+      {"${DOWNLOADS}", SystemPaths::Resolve("downloads", app_id)},
+      {"${APP_DATA}", SystemPaths::Resolve("appData", app_id)},
+      {"${APP_CACHE}", SystemPaths::Resolve("appCache", app_id)}};
   const auto exact = variables.find(value);
   if (exact != variables.end()) return exact->second;
   for (const auto& item : variables) {

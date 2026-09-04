@@ -2,10 +2,13 @@
 
 #include "lwweb/common/logging.h"
 #include "lwweb/runtime/local_file_grant.h"
+#include "lwweb/runtime/system_paths.h"
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
+#include <limits>
+#include <set>
 
 namespace lwweb {
 namespace {
@@ -73,6 +76,38 @@ bool IsValidGrantId(const std::string& id) {
          });
 }
 
+void ValidateTrayOptions(const nlohmann::json& params) {
+  if (!params.is_object())
+    throw IpcException("INVALID_ARGUMENT", "Tray options must be an object");
+  if (const auto tooltip = params.find("tooltip"); tooltip != params.end() &&
+      (!tooltip->is_string() || tooltip->get<std::string>().empty() ||
+       tooltip->get<std::string>().size() > 128))
+    throw IpcException("INVALID_ARGUMENT", "Tray tooltip must contain 1 to 128 bytes");
+  if (const auto menu = params.find("menu"); menu != params.end()) {
+    if (!menu->is_array() || menu->size() > 32)
+      throw IpcException("INVALID_ARGUMENT", "Tray menu must contain at most 32 entries");
+    std::set<std::string> ids;
+    for (const auto& item : *menu) {
+      if (!item.is_object())
+        throw IpcException("INVALID_ARGUMENT", "Tray menu entries must be objects");
+      if (item.value("type", "") == "separator") continue;
+      const auto id = item.find("id");
+      const auto label = item.find("label");
+      if (id == item.end() || !id->is_string() || id->get<std::string>().empty() ||
+          id->get<std::string>().size() > 64 || label == item.end() ||
+          !label->is_string() || label->get<std::string>().empty() ||
+          label->get<std::string>().size() > 128 ||
+          !ids.insert(id->get<std::string>()).second)
+        throw IpcException("INVALID_ARGUMENT", "Tray menu id or label is invalid");
+      for (const char* key : {"checked", "enabled"}) {
+        const auto value = item.find(key);
+        if (value != item.end() && !value->is_boolean())
+          throw IpcException("INVALID_ARGUMENT", "Tray menu flags must be boolean");
+      }
+    }
+  }
+}
+
 }  // namespace
 
 IpcDispatcher::IpcDispatcher(Manifest manifest, IpcRuntimeServices services)
@@ -83,6 +118,10 @@ IpcDispatcher::IpcDispatcher(Manifest manifest, IpcRuntimeServices services)
     auto permissions = std::make_shared<IpcFilesystemPermissions>(
         manifest_.ipc.filesystem_roots, EffectiveAppId(manifest_));
     filesystem_ = std::make_shared<IpcFilesystemAccess>(std::move(permissions));
+    file_watch_ = std::make_shared<FileWatchService>(
+        [this](const std::string& event, const nlohmann::json& data) {
+          (void)EmitEvent(event, data);
+        });
   }
 }
 
@@ -94,6 +133,10 @@ void IpcDispatcher::RequireCapability(const std::string& capability) const {
 IpcExecution IpcDispatcher::ExecutionFor(const std::string& method) const {
   if (method == "dialog.selectDirectory" || method == "dialog.openFile")
     return IpcExecution::UiThread;
+  if (method == "app.getPath") return IpcExecution::Immediate;
+  if (method.rfind("window.", 0) == 0) return IpcExecution::UiThread;
+  if (method == "app.quit") return IpcExecution::UiThread;
+  if (method.rfind("tray.", 0) == 0) return IpcExecution::UiThread;
   if (method.rfind("fs.", 0) == 0) return IpcExecution::Worker;
   return IpcExecution::Immediate;
 }
@@ -128,6 +171,19 @@ IpcResponse IpcDispatcher::Dispatch(const IpcRequest& request) {
   }
 }
 
+bool IpcDispatcher::EmitEvent(const std::string& event, const nlohmann::json& data) {
+  if (!manifest_.ipc.enabled || !services_.emit_event) return false;
+  try {
+    const auto serialized = SerializeIpcEvent({event, data});
+    // Validate and size-check before crossing a platform transport boundary.
+    const auto value = nlohmann::json::parse(serialized);
+    services_.emit_event(event, value.at("data"));
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
 nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
   if (request.method == "app.getInfo") {
     RequireCapability("app.info");
@@ -136,6 +192,98 @@ nlohmann::json IpcDispatcher::DispatchImpl(const IpcRequest& request) {
             {"platform", services_.platform},
             {"arch", services_.arch},
             {"version", services_.runtime_version}};
+  }
+  if (request.method == "app.getPath") {
+    RequireCapability("app.paths");
+    const auto name = request.params.find("name");
+    if (name == request.params.end() || !name->is_string() || name->get<std::string>().empty())
+      throw IpcException("INVALID_ARGUMENT", "Path name must be a non-empty string");
+    const auto path = SystemPaths::Resolve(name->get<std::string>(), EffectiveAppId(manifest_));
+    return {{"name", name->get<std::string>()}, {"path", path.u8string()}};
+  }
+  if (request.method == "window.getState") {
+    RequireCapability("window.control");
+    if (!services_.get_window_state)
+      throw IpcException("UNSUPPORTED", "Window control is unavailable");
+    return services_.get_window_state();
+  }
+  if (request.method == "window.show" || request.method == "window.hide" ||
+      request.method == "window.minimize" || request.method == "window.maximize" ||
+      request.method == "window.restore" || request.method == "window.focus" ||
+      request.method == "window.setAlwaysOnTop" ||
+      request.method == "window.setCloseBehavior") {
+    RequireCapability("window.control");
+    if (!services_.control_window)
+      throw IpcException("UNSUPPORTED", "Window control is unavailable");
+    if (request.method == "window.setAlwaysOnTop") {
+      const auto value = request.params.find("enabled");
+      if (value == request.params.end() || !value->is_boolean())
+        throw IpcException("INVALID_ARGUMENT", "enabled must be a boolean");
+    }
+    if (request.method == "window.setCloseBehavior") {
+      const auto value = request.params.find("behavior");
+      if (value == request.params.end() || !value->is_string() ||
+          (value->get<std::string>() != "exit" && value->get<std::string>() != "hide"))
+        throw IpcException("INVALID_ARGUMENT", "behavior must be exit or hide");
+    }
+    services_.control_window(request.method, request.params);
+    return {{"ok", true}};
+  }
+  if (request.method == "app.quit") {
+    RequireCapability("app.lifecycle");
+    if (!services_.request_quit)
+      throw IpcException("UNSUPPORTED", "Application lifecycle control is unavailable");
+    // The platform callback must defer destruction until this response has
+    // crossed the WebView transport boundary.
+    services_.request_quit();
+    return {{"quitting", true}};
+  }
+  if (request.method == "tray.create" || request.method == "tray.update") {
+    RequireCapability("tray");
+    ValidateTrayOptions(request.params);
+    const auto& callback = request.method == "tray.create" ? services_.tray_create
+                                                              : services_.tray_update;
+    if (!callback) throw IpcException("UNSUPPORTED", "System tray is unavailable");
+    return callback(request.params);
+  }
+  if (request.method == "tray.destroy") {
+    RequireCapability("tray");
+    if (!services_.tray_destroy)
+      throw IpcException("UNSUPPORTED", "System tray is unavailable");
+    return services_.tray_destroy();
+  }
+  if (request.method == "fs.watch") {
+    RequireCapability("fs.watch");
+    if (!file_watch_) throw IpcException("UNSUPPORTED", "File watch is unavailable");
+    const auto path = filesystem_->WatchDirectory(request.params);
+    bool recursive = false;
+    if (const auto value = request.params.find("recursive"); value != request.params.end()) {
+      if (!value->is_boolean())
+        throw IpcException("INVALID_ARGUMENT", "recursive must be a boolean");
+      recursive = value->get<bool>();
+    }
+    std::uint32_t debounce = 150;
+    if (const auto value = request.params.find("debounceMs"); value != request.params.end()) {
+      if ((!value->is_number_unsigned() && !value->is_number_integer()) ||
+          (value->is_number_integer() && value->get<std::int64_t>() < 0) ||
+          (value->is_number_unsigned() && value->get<std::uint64_t>() >
+                                             std::numeric_limits<std::uint32_t>::max()) ||
+          (value->is_number_integer() && value->get<std::int64_t>() >
+                                             std::numeric_limits<std::uint32_t>::max()))
+        throw IpcException("INVALID_ARGUMENT", "debounceMs must be an unsigned integer");
+      debounce = value->get<std::uint32_t>();
+    }
+    const auto watcher_id = file_watch_->Watch(path, recursive, debounce);
+    return {{"watcherId", watcher_id}, {"path", path.u8string()}, {"recursive", recursive}};
+  }
+  if (request.method == "fs.unwatch") {
+    RequireCapability("fs.watch");
+    if (!file_watch_) throw IpcException("UNSUPPORTED", "File watch is unavailable");
+    const auto value = request.params.find("watcherId");
+    if (value == request.params.end() || !value->is_string() || value->get<std::string>().empty() ||
+        value->get<std::string>().size() > 64)
+      throw IpcException("INVALID_ARGUMENT", "watcherId is invalid");
+    return {{"stopped", file_watch_->Unwatch(value->get<std::string>())}};
   }
   if (request.method == "dialog.selectDirectory") {
     RequireCapability("dialog.directory");

@@ -1,5 +1,8 @@
 #include "lwweb/ipc/ipc_message.h"
 
+#include <algorithm>
+#include <cctype>
+
 namespace lwweb {
 
 IpcException::IpcException(std::string code, std::string message)
@@ -54,6 +57,38 @@ IpcResponse MakeIpcError(std::string id, std::string code, std::string message) 
   response.id = std::move(id);
   response.error = {std::move(code), std::move(message)};
   return response;
+}
+
+bool IsValidIpcEventName(const std::string& event) {
+  if (event.empty() || event.size() > kMaxIpcIdentifierSize || event.front() == '.' ||
+      event.back() == '.')
+    return false;
+  bool segment_has_character = false;
+  for (const unsigned char character : event) {
+    if (std::isalnum(character) || character == '_' || character == '-') {
+      segment_has_character = true;
+    } else if (character == '.') {
+      if (!segment_has_character) return false;
+      segment_has_character = false;
+    } else {
+      return false;
+    }
+  }
+  return segment_has_character;
+}
+
+nlohmann::json IpcEventToJson(const IpcEvent& event) {
+  if (!IsValidIpcEventName(event.event))
+    throw IpcException("INVALID_ARGUMENT", "IPC event name is invalid");
+  const nlohmann::json value = { {"v", 1}, {"kind", "event"},
+                                 {"event", event.event}, {"data", event.data} };
+  if (value.dump().size() > kMaxIpcEventSize)
+    throw IpcException("INVALID_ARGUMENT", "IPC event exceeds the 256 KiB limit");
+  return value;
+}
+
+std::string SerializeIpcEvent(const IpcEvent& event) {
+  return IpcEventToJson(event).dump();
 }
 
 }  // namespace lwweb

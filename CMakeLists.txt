@@ -129,6 +129,8 @@ add_library(lwweb_core STATIC
   src/runtime/local_file_grant.cpp
   src/runtime/proxy_stream.cpp
   src/runtime/single_instance.cpp
+  src/runtime/file_watch.cpp
+  src/runtime/system_paths.cpp
   src/runtime/resource_server.cpp)
 target_include_directories(lwweb_core PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(lwweb_core SYSTEM PRIVATE ${miniz_SOURCE_DIR})
@@ -185,7 +187,9 @@ install(TARGETS lwweb RUNTIME DESTINATION bin)
 if(UNIX AND NOT APPLE)
   install(FILES resources/linux/lw.Web2App.desktop DESTINATION share/applications)
   install(FILES resources/linux/lw.Web2App.svg DESTINATION share/icons/hicolor/scalable/apps)
-  install(FILES README.md README_EN.md DESTINATION share/doc/lw-web2app)
+  install(FILES README.md README_EN.md docs/native-ipc.md docs/native-ipc_EN.md
+          docs/desktop-integration.md docs/desktop-integration_EN.md
+          DESTINATION share/doc/lw-web2app)
   install(FILES docs/assets/lw.Web2App.png docs/assets/lw.Web2App-linux.png
           DESTINATION share/doc/lw-web2app/docs/assets)
 
@@ -218,6 +222,7 @@ if(BUILD_TESTING)
     tests/publish_config_tests.cpp
     tests/publisher_tests.cpp
     tests/resource_tests.cpp
+    tests/system_paths_tests.cpp
     tests/signing_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)
   target_include_directories(lwweb_tests SYSTEM PRIVATE ${miniz_SOURCE_DIR})

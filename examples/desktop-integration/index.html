@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Desktop Integration 示例</title>
+  <style>
+    body { max-width: 760px; margin: 40px auto; padding: 0 20px; font: 16px system-ui, sans-serif; }
+    button { margin-right: 8px; padding: 8px 14px; }
+    pre { padding: 16px; background: #f4f6f8; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <h1>Desktop Integration 示例</h1>
+  <p>演示系统目录解析和 Native → Web 事件监听。监听目录前，请先通过 IPC 授权目录。</p>
+  <button id="paths">读取应用目录</button>
+  <button id="listen">监听文件变化事件</button>
+  <pre id="output">等待操作…</pre>
+  <script>
+    const output = document.querySelector('#output');
+    const show = value => output.textContent = typeof value === 'string'
+      ? value : JSON.stringify(value, null, 2);
+    document.querySelector('#paths').onclick = async () => {
+      try {
+        const names = ['home', 'appData', 'appCache', 'temp'];
+        const values = {};
+        for (const name of names) values[name] = await window.lw.invoke('app.getPath', { name });
+        show(values);
+      } catch (error) { show(`${error.code}: ${error.message}`); }
+    };
+    document.querySelector('#listen').onclick = () => {
+      window.lw.on('fs.changed', data => show({ event: 'fs.changed', data }));
+      show('已注册 fs.changed 监听器。请调用 fs.watch({ path, recursive: true }) 开始监听，完成后调用 fs.unwatch。');
+    };
+  </script>
+</body>
+</html>

@@ -212,6 +212,15 @@ std::filesystem::path IpcFilesystemAccess::OpenReadPath(
   return AuthorizedRegularFile(permissions_, params, "Open read");
 }
 
+std::filesystem::path IpcFilesystemAccess::WatchDirectory(
+    const nlohmann::json& params) const {
+  const auto path = permissions_->RequireExisting(RequiredString(params, "path"));
+  std::error_code error;
+  if (!std::filesystem::is_directory(path, error) || error)
+    throw IpcException("INVALID_ARGUMENT", "fs.watch path must be a directory");
+  return path;
+}
+
 std::filesystem::path IpcFilesystemAccess::TrashPath(
     const nlohmann::json& params) const {
   return AuthorizedRegularFile(permissions_, params, "Move to trash");
