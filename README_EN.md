@@ -39,6 +39,7 @@ Linux graphical packager (Ubuntu 22.04):
 - Deterministic GUI discovery of `.html`/`.htm` launch pages; separate Manifest, GUI, and CLI `entry` and `start_path` settings support both multi-page entry files and initial SPA routes.
 - The local HTTP service binds only to `127.0.0.1` and prefers a stable per-`app_id` dynamic port, with deterministic fallback ports when an unrelated process occupies it.
 - True cross-platform single-instance locking uses a Windows named mutex or Linux `flock`, independently of the HTTP port.
+- On Windows, a second launch notifies and activates the existing window; on Linux it exits quietly to avoid a duplicate process.
 - An optional controlled backend proxy forwards same-origin `/__lw_proxy__/...` requests to one fixed legacy HTTP origin from the Manifest, without disabling WebView security; Windows and Linux share the same implementation.
 - Optional Native IPC exposes app information, system directory/file pickers, permission-scoped filesystem operations, file watching, window control, application exit, and the Windows system tray to trusted local pages through the stable `window.lw.invoke()` API. A session Local File Bridge streams large local files over localhost HTTP. Both are disabled by default and authorized per method.
 - Exact Host validation, no wildcard CORS, no directory listing, and path traversal protection.
@@ -594,7 +595,6 @@ Next priorities are AppImage evaluation and an external-link policy, followed by
 Other planned improvements:
 
 - Multi-resolution icon generation
-- Activating the existing window on a second launch
 - External-link policy
 - Custom user agents, startup arguments, and CSP
 

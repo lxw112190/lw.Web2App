@@ -39,6 +39,7 @@ Linux 图形打包器（Ubuntu 22.04）：
 - GUI 自动扫描并稳定排序 `.html`/`.htm` 启动页；Manifest、GUI 与 CLI 分别用 `entry` 和 `start_path` 支持传统多页面入口及 SPA 初始路由。
 - 本地 HTTP 服务仅监听 `127.0.0.1`，每个 `app_id` 优先使用稳定的应用专属动态端口；端口被无关程序占用时会自动尝试确定性的备用端口。
 - Windows 使用 Named Mutex、Linux 使用 `flock` 实现真正的跨平台单实例，单实例状态不再依赖 HTTP 端口占用。
+- Windows 第二次启动会通知并前置已有窗口；Linux 第二次启动会直接退出，避免重复运行。
 - 可选的受控后台代理把 `/__lw_proxy__/...` 同源请求转发到 Manifest 固定的传统 HTTP Origin，不需要关闭 WebView 安全策略，Windows 与 Linux 共用同一实现。
 - 可选 Native IPC 通过稳定的 `window.lw.invoke()` API 为可信本地页面提供应用信息、系统目录/文件选择、受权限约束的文件操作、文件变化监听、窗口控制、应用退出和 Windows 系统托盘；Session Local File Bridge 通过 localhost HTTP 流式提供大型本地文件；默认关闭且按方法授权。
 - 校验精确 Host，不默认开放跨域，不提供目录浏览。
@@ -595,7 +596,6 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 其他后续方向：
 
 - 多分辨率图标生成
-- 第二次启动时前置已有窗口
 - 外部链接策略
 - 自定义 User-Agent、启动参数和 CSP
 

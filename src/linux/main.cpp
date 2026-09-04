@@ -505,6 +505,7 @@ int RunPayloadApp(const LoadedPayload& payload) {
   if (payload.manifest.mode == AppMode::Local)
     logger.Info("Start path: " + payload.manifest.start_path);
   SingleInstanceGuard instance_guard(app_id);
+  if (!instance_guard.IsPrimary()) return 0;
 
   std::unique_ptr<ResourceServer> server;
   auto file_grants = std::make_shared<LocalFileGrantManager>(&logger);

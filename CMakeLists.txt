@@ -222,6 +222,7 @@ if(BUILD_TESTING)
     tests/publish_config_tests.cpp
     tests/publisher_tests.cpp
     tests/resource_tests.cpp
+    tests/single_instance_tests.cpp
     tests/system_paths_tests.cpp
     tests/signing_tests.cpp)
   target_include_directories(lwweb_tests PRIVATE include)

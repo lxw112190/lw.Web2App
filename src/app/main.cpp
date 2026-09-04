@@ -40,6 +40,7 @@ struct RuntimeState {
   bool fullscreen = false;
   std::string close_behavior = "exit";
   bool tray_created = false;
+  UINT activate_message = 0;
   NOTIFYICONDATAW tray_icon{sizeof(NOTIFYICONDATAW)};
   UINT taskbar_created_message = 0;
   std::vector<nlohmann::json> tray_menu;
@@ -253,6 +254,13 @@ LRESULT CALLBACK RuntimeProc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     DestroyWindow(window);
     return 0;
   }
+  if (state && state->activate_message != 0 && message == state->activate_message) {
+    ShowWindow(window, SW_SHOW);
+    if (IsIconic(window)) ShowWindow(window, SW_RESTORE);
+    SetForegroundWindow(window);
+    SetFocus(window);
+    return 0;
+  }
   if (state && message == kRuntimeTrayMessage) {
     HandleTrayMessage(window, *state, lparam);
     return 0;
@@ -299,6 +307,7 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
     state->logger.Info("Start path: " + payload.manifest.start_path);
   state->instance_guard =
       std::make_unique<SingleInstanceGuard>(EffectiveAppId(payload.manifest));
+  if (!state->instance_guard->IsPrimary()) return 0;
   if (payload.manifest.mode == AppMode::Local) {
     state->file_grants = std::make_shared<LocalFileGrantManager>(&state->logger);
     state->server = std::make_unique<ResourceServer>(payload, SecurityLimits{},
@@ -337,6 +346,9 @@ int RunPayloadApp(HINSTANCE instance, const LoadedPayload& payload) {
   }
   SetWindowLongPtrW(window, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
   state->taskbar_created_message = RegisterWindowMessageW(L"TaskbarCreated");
+  const auto activation_name = L"lw.Web2App.Activate." +
+                               Utf8ToWide(EffectiveAppId(payload.manifest));
+  state->activate_message = RegisterWindowMessageW(activation_name.c_str());
   state->emit_event = [state](const std::string& event, const nlohmann::json& data) {
     if (state->webview) (void)state->webview->EmitIpcEvent(event, data);
   };

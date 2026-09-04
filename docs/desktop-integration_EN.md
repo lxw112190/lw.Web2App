@@ -39,6 +39,13 @@ Application data and cache paths are isolated by app ID. Resolving a path does n
 
 See the [Native IPC guide](native-ipc_EN.md) for request/response methods.
 
+## Single-instance behavior
+
+Each generated app has an `app_id`-scoped single-instance lock. On Windows, a second
+launch notifies the first process, which shows and focuses its existing window. On Linux,
+the second launch exits quietly. This is independent of the local HTTP port and does not
+forward web-page arguments to the existing process.
+
 ## `fs.watch`
 
 Capability: `fs.watch`. Only directories covered by a fixed root or Session Grant can be watched:

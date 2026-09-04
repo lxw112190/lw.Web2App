@@ -43,6 +43,12 @@ Windows 使用 Known Folder；Linux 优先读取 XDG 环境变量和 `user-dirs.
 
 更多请求/响应接口请参阅 [Native IPC 指南](native-ipc.md)。
 
+## 单实例行为
+
+每个生成应用按 `app_id` 使用独立的单实例锁。Windows 第二次启动会通知第一个进程，
+由第一个进程显示并聚焦已有窗口；Linux 第二次启动会直接退出。该机制与本地 HTTP
+端口无关，也不会把网页参数传给已有进程。
+
 ## `fs.watch`
 
 能力：`fs.watch`。只能监听已经通过固定根目录或 Session Grant 授权的目录：

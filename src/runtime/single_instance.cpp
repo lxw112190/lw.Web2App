@@ -23,8 +23,10 @@ namespace lwweb {
 struct SingleInstanceGuard::Impl {
 #ifdef _WIN32
   HANDLE mutex = nullptr;
+  bool primary = false;
 #else
   int descriptor = -1;
+  bool primary = false;
 #endif
 
   explicit Impl(const std::string& app_id) {
@@ -37,8 +39,12 @@ struct SingleInstanceGuard::Impl {
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
       CloseHandle(mutex);
       mutex = nullptr;
-      throw Error("Another instance of this application is already running");
+      const auto message_name = L"lw.Web2App.Activate." + Utf8ToWide(app_id);
+      const auto message = RegisterWindowMessageW(message_name.c_str());
+      if (message != 0) (void)PostMessageW(HWND_BROADCAST, message, 0, 0);
+      return;
     }
+    primary = true;
 #else
     const auto directory = LocalAppDataRoot() / "apps" / app_id;
     std::error_code filesystem_error;
@@ -61,11 +67,11 @@ struct SingleInstanceGuard::Impl {
       const auto error = errno;
       close(descriptor);
       descriptor = -1;
-      if (error == EWOULDBLOCK || error == EAGAIN)
-        throw Error("Another instance of this application is already running");
+      if (error == EWOULDBLOCK || error == EAGAIN) return;
       throw Error("Cannot lock the application single-instance file: " +
                   std::string(std::strerror(error)));
     }
+    primary = true;
     (void)ftruncate(descriptor, 0);
     const auto pid = std::to_string(static_cast<long long>(getpid())) + "\n";
     (void)write(descriptor, pid.data(), pid.size());
@@ -88,5 +94,7 @@ SingleInstanceGuard::SingleInstanceGuard(const std::string& app_id)
     : impl_(std::make_unique<Impl>(app_id)) {}
 
 SingleInstanceGuard::~SingleInstanceGuard() = default;
+
+bool SingleInstanceGuard::IsPrimary() const noexcept { return impl_ && impl_->primary; }
 
 }  // namespace lwweb
