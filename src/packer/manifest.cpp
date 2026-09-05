@@ -39,6 +39,11 @@ void ValidateManifest(const Manifest& manifest) {
       manifest.logging.max_file_size > 128ull * 1024 * 1024 ||
       manifest.logging.max_files == 0 || manifest.logging.max_files > 20)
     throw Error("Logging rotation configuration is outside the supported range");
+  if (manifest.external_links.policy != "auto" &&
+      manifest.external_links.policy != "allow" &&
+      manifest.external_links.policy != "block" &&
+      manifest.external_links.policy != "browser")
+    throw Error("External link policy must be auto, allow, block, or browser");
   if (manifest.mode == AppMode::Local) {
     if (!NormalizeArchivePath(manifest.entry)) throw Error("Unsafe manifest entry path");
     if (!IsSafeStartPath(manifest.start_path)) throw Error("Unsafe manifest start path");
@@ -138,6 +143,7 @@ std::string SerializeManifest(const Manifest& manifest, bool pretty) {
         {"read_timeout_ms", manifest.backend_proxy.read_timeout_ms},
         {"max_request_size", manifest.backend_proxy.max_request_size},
         {"max_response_size", manifest.backend_proxy.max_response_size}}},
+      {"external_links", {{"policy", manifest.external_links.policy}}},
       {"ipc", {{"enabled", manifest.ipc.enabled},
                {"capabilities", manifest.ipc.capabilities},
                {"filesystem_roots", manifest.ipc.filesystem_roots}}}};
@@ -167,6 +173,10 @@ Manifest ParseManifest(const std::string& json) {
     manifest.fullscreen = value.value("fullscreen", false);
     manifest.devtools = value.value("devtools", false);
     manifest.spa_fallback = value.value("spa_fallback", true);
+    if (const auto links = value.find("external_links"); links != value.end()) {
+      if (!links->is_object()) throw Error("external_links must be an object");
+      manifest.external_links.policy = links->value("policy", "auto");
+    }
     if (const auto proxy = value.find("backend_proxy"); proxy != value.end()) {
       manifest.backend_proxy.enabled = proxy->value("enabled", false);
       manifest.backend_proxy.origin = proxy->value("origin", "");

@@ -73,6 +73,7 @@ enum ControlId {
   kFullscreen,
   kResizable,
   kSpa,
+  kExternalLinks,
   kLogging,
   kDebugLogging,
   kIpcEnabled,
@@ -266,6 +267,17 @@ std::wstring Trim(std::wstring value) {
   if (first == std::wstring::npos) return {};
   const auto last = value.find_last_not_of(L" \t\r\n");
   return value.substr(first, last - first + 1U);
+}
+
+std::string SelectedExternalLinkPolicy(HWND window) {
+  const auto index = static_cast<int>(SendMessageW(
+      GetDlgItem(window, kExternalLinks), CB_GETCURSEL, 0, 0));
+  switch (index) {
+    case 1: return "allow";
+    case 2: return "block";
+    case 3: return "browser";
+    default: return "auto";
+  }
 }
 
 void SetDynamicLabelText(HWND window, int id, const std::wstring& text) {
@@ -1025,6 +1037,7 @@ void Pack(HWND window) {
     options.manifest.resizable = IsDlgButtonChecked(window, kResizable) == BST_CHECKED;
     options.manifest.fullscreen = IsDlgButtonChecked(window, kFullscreen) == BST_CHECKED;
     options.manifest.spa_fallback = IsDlgButtonChecked(window, kSpa) == BST_CHECKED;
+    options.manifest.external_links.policy = SelectedExternalLinkPolicy(window);
     options.manifest.backend_proxy.enabled =
         IsDlgButtonChecked(window, kModeLocal) == BST_CHECKED &&
         IsDlgButtonChecked(window, kBackendProxy) == BST_CHECKED;
@@ -1131,6 +1144,17 @@ void BuildInterface(State& state) {
   AddButton(state, L"查看最新版本", 274, 536, 232, 30, kLatestRelease);
 
   AddLabel(state, L"02  应用设置", 558, 111, 200, 25, 0, state.section_font);
+  AddLabel(state, L"外部链接", 822, 112, 70, 20, 0, state.small_font);
+  const auto external_links = AddCombo(state, 890, 106, 182, kExternalLinks);
+  SendMessageW(external_links, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(L"自动（推荐）"));
+  SendMessageW(external_links, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(L"应用内打开"));
+  SendMessageW(external_links, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(L"阻止外链"));
+  SendMessageW(external_links, CB_ADDSTRING, 0,
+               reinterpret_cast<LPARAM>(L"系统浏览器"));
+  SendMessageW(external_links, CB_SETCURSEL, 0, 0);
   AddLabel(state, L"应用名称", 558, 148, 88, 20, 0, state.small_font);
   AddEdit(state, L"我的网页应用", 656, 143, 416, kTitle, L"窗口标题栏显示的名称");
   AddLabel(state, L"产品名称", 558, 184, 88, 20, 0, state.small_font);

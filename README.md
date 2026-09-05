@@ -355,6 +355,7 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --windowed `
   --debug-log `
   --backend-origin http://192.0.2.10:8080 `
+  --external-links browser `
   --icon .\app.png `
   --company "示例公司" `
   --version 1.2.0.0 `
@@ -389,6 +390,7 @@ Linux 使用相同命令结构，不带 `.exe`，输出文件会自动获得可�
 - `--entry`：指定归档内真实入口 HTML，例如 `login.html` 或 `pages/login.html`。
 - `--start-path`：指定首次导航路径，例如 `/login.html`、`/login` 或 `/#/login`；未指定时根据 `entry` 自动建议，根目录 `index.html` 对应 `/`。
 - `--backend-origin`：启用跨平台受控后台代理并固定唯一 HTTP Origin，例如 `http://192.0.2.10:8080`；前端请求基地址应改为 `/__lw_proxy__`。
+- `--external-links`：设置外部 `http(s)` 链接策略：`auto`（默认，保持兼容行为）、`allow`（在应用内导航）、`block`（阻止）或 `browser`（交给系统默认浏览器）。`browser` 只处理 `http(s)`，其他协议会阻止。
 - `--ipc`：为本地打包模式启用 Native IPC；在线 URL 模式禁止启用。
 - `--ipc-capability`：重复传入需要的能力，例如 `app.info`、`app.paths`、`dialog.directory`、`dialog.file`、`fs.exists`、`fs.list`、`fs.read`、`fs.mkdir`、`fs.copy`、`fs.move`、`fs.trash`、`fs.delete`、`fs.watch`、`window.control`、`app.lifecycle`、`tray`。
 - `--ipc-root`：重复传入文件系统固定根目录；支持 `${HOME}`、`${DESKTOP}`、`${DOCUMENTS}`、`${PICTURES}`、`${DOWNLOADS}`、`${APP_DATA}`、`${APP_CACHE}`。
@@ -591,7 +593,7 @@ Ubuntu Linux 首版已经交付跨平台核心、GTK3 GUI、CLI、ELF Runner、W
 - 使用系统 WebKitGTK 4.1，不捆绑浏览器内核，因此安全更新与 Web API 兼容性跟随 Ubuntu 更新。
 - GTK 与 Win32 图形打包器都在后台线程压缩资源，界面在大型项目打包期间保持响应；取消操作和进度百分比属于后续改进。
 
-下一阶段优先评估 AppImage 可行性和外部链接策略；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
+下一阶段优先评估 AppImage 可行性；完成 x86_64 稳定性验证后再评估 ARM64、Debian 系和 RPM 系发行版。
 
 其他后续方向：
 

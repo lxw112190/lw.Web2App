@@ -348,6 +348,7 @@ lw.Web2App.exe pack .\dist .\MyApp.exe `
   --windowed `
   --debug-log `
   --backend-origin http://192.0.2.10:8080 `
+  --external-links browser `
   --icon .\app.png `
   --company "Example Company" `
   --version 1.2.0.0 `
@@ -382,6 +383,7 @@ Additional options:
 - `--entry`: select the real archived HTML, such as `login.html` or `pages/login.html`.
 - `--start-path`: select the initial navigation path, such as `/login.html`, `/login`, or `/#/login`; when omitted it is derived from `entry`, with a root `index.html` mapping to `/`.
 - `--backend-origin`: enable the cross-platform controlled proxy and fix its only HTTP origin, for example `http://192.0.2.10:8080`; frontend API requests should use `/__lw_proxy__` as their base.
+- `--external-links`: choose the external `http(s)` link policy: `auto` (default, compatibility behavior), `allow` (navigate inside the app), `block`, or `browser` (open with the system default browser). `browser` handles only `http(s)`; other schemes are blocked.
 - `--ipc`: enable Native IPC for a local package; URL mode cannot enable it.
 - `--ipc-capability`: repeat for each capability, such as `app.info`, `app.paths`, `dialog.directory`, `dialog.file`, `fs.exists`, `fs.list`, `fs.read`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, `fs.delete`, `fs.watch`, `window.control`, `app.lifecycle`, or `tray`.
 - `--ipc-root`: repeat for each fixed filesystem root; `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`, `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}` are supported.
@@ -590,7 +592,7 @@ Explicit Linux Beta boundaries:
 - Rendering uses the system WebKitGTK 4.1. Browser security updates and Web API behavior therefore follow Ubuntu updates.
 - Both GTK and Win32 package resources on a worker thread so the GUI remains responsive for large projects. Cancellation and percentage progress remain future work.
 
-Next priorities are AppImage evaluation and an external-link policy, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
+Next priority is AppImage evaluation, followed by ARM64, Debian-family, and RPM-family evaluation after x86_64 stability work.
 
 Other planned improvements:
 

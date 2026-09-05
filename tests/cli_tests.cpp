@@ -82,6 +82,12 @@ void RunCliTests() {
   Check(proxy_command.pack.manifest.backend_proxy.origin ==
             "http://192.0.2.10:8080",
         "backend proxy origin parsed");
+  const auto external_command = lwweb::ParseCommandLine(
+      {"lw.Web2App", "pack-url", "https://example.com", "example.exe",
+       "--external-links", "browser"},
+      "runner.exe");
+  Check(external_command.pack.manifest.external_links.policy == "browser",
+        "external link policy parsed");
 
   const auto ipc_command = lwweb::ParseCommandLine(
       {"lw.Web2App", "pack", ".", "example.exe", "--entry", "index.html",
@@ -137,6 +143,9 @@ void RunCliTests() {
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--backend-origin") !=
             std::string::npos,
         "help includes controlled backend proxy option");
+  Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--external-links") !=
+            std::string::npos,
+        "help includes external link policy option");
   Check(lwweb::CommandLineHelp(lwweb::CliPlatform::Windows).find("--ipc-capability") !=
             std::string::npos,
         "help includes Native IPC capability option");

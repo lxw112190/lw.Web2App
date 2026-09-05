@@ -132,6 +132,8 @@ CliCommand ParseCommandLine(const std::vector<std::string>& args,
   options.manifest.fullscreen = !HasArgument(args, "--windowed");
   options.manifest.spa_fallback = !HasArgument(args, "--no-spa");
   options.manifest.devtools = HasArgument(args, "--devtools");
+  options.manifest.external_links.policy =
+      ArgumentValue(args, "--external-links", "auto");
   options.manifest.backend_proxy.origin = ArgumentValue(args, "--backend-origin");
   options.manifest.backend_proxy.enabled = !options.manifest.backend_proxy.origin.empty();
   options.manifest.ipc.enabled = HasArgument(args, "--ipc");
@@ -173,6 +175,7 @@ std::string CommandLineHelp(CliPlatform platform) {
        << "             [--start-path / | /login | /login.html]\n"
        << "             [--width 1280] [--height 800] [--app-id com.example.app]\n"
        << "             [--no-spa] [--windowed] [--no-log | --debug-log] [--devtools]\n"
+       << "             [--external-links auto|allow|block|browser]\n"
        << "             [--backend-origin http://host:port]\n"
        << "             [--ipc --ipc-capability app.info --ipc-capability app.paths]\n"
        << "             [--ipc-capability fs.watch --ipc-capability window.control]\n"

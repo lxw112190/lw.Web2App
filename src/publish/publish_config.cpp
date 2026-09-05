@@ -289,11 +289,16 @@ ProjectConfig LoadProjectConfig(
 
     if (const auto* runtime = OptionalObject(root, "runtime", "")) {
       RejectUnknownKeys(*runtime, {"spa_fallback", "devtools", "logging",
-                                   "backend_proxy", "ipc"}, "runtime.");
+                                   "backend_proxy", "external_links", "ipc"}, "runtime.");
       pack.manifest.spa_fallback =
           BoolValue(*runtime, "spa_fallback", true, "runtime.");
       pack.manifest.devtools =
           BoolValue(*runtime, "devtools", false, "runtime.");
+      if (const auto* links = OptionalObject(*runtime, "external_links", "runtime.")) {
+        RejectUnknownKeys(*links, {"policy"}, "runtime.external_links.");
+        pack.manifest.external_links.policy =
+            StringValue(*links, "policy", "auto", "runtime.external_links.");
+      }
       if (const auto* logging = OptionalObject(*runtime, "logging", "runtime.")) {
         RejectUnknownKeys(*logging, {"enabled", "level", "max_file_size",
                                      "max_files"}, "runtime.logging.");

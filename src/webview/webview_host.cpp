@@ -2,6 +2,7 @@
 
 #include "lwweb/common/error.h"
 #include "lwweb/common/file_utils.h"
+#include "lwweb/common/path_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/sha256.h"
 #include "lwweb/ipc/ipc_dispatcher.h"
@@ -12,6 +13,7 @@
 #include <Shellapi.h>
 
 #include <filesystem>
+#include <cstdint>
 #include <iterator>
 #include <optional>
 #include <thread>
@@ -475,7 +477,7 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
                                          return S_OK;
                                        }).Get(),
                                    &navigation_token);
-                               if (ipc_dispatcher_) {
+                               if (ipc_dispatcher_ || manifest_.external_links.policy != "auto") {
                                  EventRegistrationToken starting_token{};
                                  webview_->add_NavigationStarting(
                                      Callback<ICoreWebView2NavigationStartingEventHandler>(
@@ -484,15 +486,48 @@ void WebViewHost::Create(HWND window, const std::wstring& url,
                                              -> HRESULT {
                                            LPWSTR uri = nullptr;
                                            if (SUCCEEDED(args->get_Uri(&uri)) && uri) {
-                                             const auto allowed = IsAllowedIpcSource(
-                                                 WideToUtf8(uri), local_origin_);
-                                             CoTaskMemFree(uri);
-                                             if (!allowed) {
+                                             const auto uri_text = WideToUtf8(uri);
+                                             // URL mode must be able to load its configured
+                                             // starting page even when a stricter policy is set.
+                                             if (manifest_.mode == AppMode::Url &&
+                                                 uri_text == WideToUtf8(url_)) {
+                                               CoTaskMemFree(uri);
+                                               return S_OK;
+                                             }
+                                             const auto local = IsAllowedIpcSource(
+                                                 uri_text, local_origin_);
+                                             const auto policy = manifest_.external_links.policy;
+                                             const auto block = !local &&
+                                                 (policy == "block" ||
+                                                  (policy == "auto" && ipc_dispatcher_));
+                                             bool handled = false;
+                                             bool browser_failed = false;
+                                             if (!local && policy == "browser" &&
+                                                 IsSupportedHttpUrl(uri_text)) {
+                                               const auto result = ShellExecuteW(
+                                                   window_, L"open", uri, nullptr, nullptr,
+                                                   SW_SHOWNORMAL);
+                                               handled = true;
+                                               if (reinterpret_cast<std::uintptr_t>(result) <= 32) {
+                                                 browser_failed = true;
+                                                 if (logger_) logger_->Warn(
+                                                     "Failed to open external link in browser");
+                                               } else if (logger_) {
+                                                 logger_->Info("Opened external link in browser");
+                                               }
+                                             }
+                                             if (!local && (block || handled ||
+                                                            (policy == "browser" &&
+                                                             !IsSupportedHttpUrl(uri_text)))) {
                                                args->put_Cancel(TRUE);
                                                if (logger_)
                                                  logger_->Warn(
-                                                     "Blocked external navigation while Native IPC is enabled");
+                                                     block ? "Blocked external navigation by policy" :
+                                                     browser_failed ?
+                                                         "External browser launch failed" :
+                                                         "External navigation is not an http(s) URL");
                                              }
+                                             CoTaskMemFree(uri);
                                            }
                                            return S_OK;
                                          }).Get(),

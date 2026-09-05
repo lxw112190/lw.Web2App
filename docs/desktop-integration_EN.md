@@ -46,6 +46,16 @@ launch notifies the first process, which shows and focuses its existing window. 
 the second launch exits quietly. This is independent of the local HTTP port and does not
 forward web-page arguments to the existing process.
 
+## External-link policy
+
+Use `--external-links auto|allow|block|browser` in the CLI or set
+`runtime.external_links.policy` in a project configuration. `auto` is the compatibility
+default: external navigation is blocked when Native IPC is enabled and otherwise allowed
+inside the WebView. `allow` always permits it, `block` always denies it, and `browser`
+opens only `http(s)` links with the system default browser; other schemes are denied.
+The configured start URL in online mode is always allowed for its initial load; the policy
+applies to subsequent external navigations.
+
 ## `fs.watch`
 
 Capability: `fs.watch`. Only directories covered by a fixed root or Session Grant can be watched:

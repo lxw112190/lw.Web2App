@@ -49,6 +49,14 @@ Windows 使用 Known Folder；Linux 优先读取 XDG 环境变量和 `user-dirs.
 由第一个进程显示并聚焦已有窗口；Linux 第二次启动会直接退出。该机制与本地 HTTP
 端口无关，也不会把网页参数传给已有进程。
 
+## 外部链接策略
+
+可以在 CLI 中使用 `--external-links auto|allow|block|browser`，或在项目配置的
+`runtime.external_links.policy` 中设置。`auto` 为兼容默认值：启用 Native IPC 时阻止
+外部导航，否则允许 WebView 内导航；`allow` 始终允许；`block` 始终阻止；`browser`
+把 `http(s)` 链接交给系统默认浏览器，其他协议一律阻止。
+在线 URL 模式的配置首页始终允许首次加载，策略仅作用于后续外部导航。
+
 ## `fs.watch`
 
 能力：`fs.watch`。只能监听已经通过固定根目录或 Session Grant 授权的目录：

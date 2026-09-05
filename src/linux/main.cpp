@@ -1,5 +1,6 @@
 #include "lwweb/cli/command_line.h"
 #include "lwweb/common/error.h"
+#include "lwweb/common/http_origin.h"
 #include "lwweb/common/file_utils.h"
 #include "lwweb/common/logging.h"
 #include "lwweb/common/path_utils.h"
@@ -107,6 +108,8 @@ struct RuntimeState {
   WebKitWebView* view = nullptr;
   std::shared_ptr<IpcDispatcher> ipc_dispatcher;
   std::string local_origin;
+  std::string external_link_policy = "auto";
+  std::string initial_navigation;
   std::string ipc_transport_token;
   bool fullscreen = false;
   bool always_on_top = false;
@@ -400,15 +403,36 @@ void OnIpcScriptMessage(WebKitUserContentManager*, WebKitJavascriptResult* resul
 gboolean OnRuntimeDecidePolicy(WebKitWebView*, WebKitPolicyDecision* decision,
                                WebKitPolicyDecisionType type, gpointer data) {
   auto* state = static_cast<RuntimeState*>(data);
-  if (!state->ipc_dispatcher || type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)
+  if ((!state->ipc_dispatcher && state->external_link_policy == "auto") ||
+      type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION)
     return FALSE;
   auto* navigation = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
   auto* action = webkit_navigation_policy_decision_get_navigation_action(navigation);
   auto* request = webkit_navigation_action_get_request(action);
   const auto* uri = webkit_uri_request_get_uri(request);
+  if (uri && state->initial_navigation == uri) return FALSE;
   if (uri && IsAllowedIpcSource(uri, state->local_origin)) return FALSE;
+  const auto& policy = state->external_link_policy;
+  if (policy == "allow") return FALSE;
+  bool opened_in_browser = false;
+  if (policy == "browser" && IsSupportedHttpUrl(uri ? uri : "")) {
+    GError* error = nullptr;
+    gtk_show_uri_on_window(GTK_WINDOW(state->window), uri, GDK_CURRENT_TIME, &error);
+    opened_in_browser = true;
+    if (error) {
+      state->logger->Warn("Failed to open external link in browser: " +
+                          std::string(error->message));
+      g_error_free(error);
+    } else {
+      state->logger->Info("Opened external link in browser");
+    }
+  }
   webkit_policy_decision_ignore(decision);
-  state->logger->Warn("Blocked external navigation while Native IPC is enabled");
+  if (!opened_in_browser)
+    state->logger->Warn(policy == "block" ||
+                                (policy == "auto" && state->ipc_dispatcher)
+                            ? "Blocked external navigation by policy"
+                            : "External navigation is not an http(s) URL");
   return TRUE;
 }
 
@@ -574,6 +598,8 @@ int RunPayloadApp(const LoadedPayload& payload) {
   state.window = window;
   state.view = view;
   state.local_origin = local_origin;
+  state.external_link_policy = payload.manifest.external_links.policy;
+  state.initial_navigation = navigation;
   state.ipc_transport_token = ipc_transport_token;
   state.fullscreen = payload.manifest.fullscreen;
   if (payload.manifest.ipc.enabled) {

@@ -94,6 +94,7 @@ void RunPublishConfigTests() {
         "max_request_size": 1048576,
         "max_response_size": 8388608
       },
+      "external_links": {"policy": "browser"},
       "ipc": {
         "enabled": true,
         "capabilities": ["app.info", "dialog.directory", "fs.list"],
@@ -148,6 +149,7 @@ void RunPublishConfigTests() {
             config.pack.manifest.logging.max_file_size == 1048576 &&
             config.pack.manifest.logging.max_files == 3 &&
             config.pack.manifest.backend_proxy.enabled &&
+            config.pack.manifest.external_links.policy == "browser" &&
             config.pack.manifest.ipc.enabled &&
             config.pack.manifest.ipc.capabilities.size() == 3,
         "runtime settings map to the existing validated manifest");

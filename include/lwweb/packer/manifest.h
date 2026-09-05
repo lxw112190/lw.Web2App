@@ -28,6 +28,12 @@ struct BackendProxyConfig {
   std::uint64_t max_response_size = 64ull * 1024 * 1024;
 };
 
+// 控制生成应用遇到外部 http(s) 链接时的处理方式。
+// auto 保持兼容行为：启用 Native IPC 时阻止，否则允许在 WebView 内导航。
+struct ExternalLinkConfig {
+  std::string policy = "auto";
+};
+
 // 为本地页面开放的受控 Native IPC 能力。能力和文件系统根目录均由打包时固定，
 // Runtime 不接受网页临时扩大权限；系统目录选择器产生的授权只在本次会话有效。
 struct IpcConfig {
@@ -54,6 +60,7 @@ struct Manifest {
   bool fullscreen = true;
   bool devtools = false;
   BackendProxyConfig backend_proxy;
+  ExternalLinkConfig external_links;
   IpcConfig ipc;
   bool spa_fallback = true;
   LoggingConfig logging;

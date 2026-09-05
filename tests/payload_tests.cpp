@@ -622,11 +622,13 @@ void RunPayloadTests() {
   lwweb::Manifest proxy_manifest;
   proxy_manifest.backend_proxy.enabled = true;
   proxy_manifest.backend_proxy.origin = "http://127.0.0.1:18080";
+  proxy_manifest.external_links.policy = "browser";
   const auto proxy_round_trip =
       lwweb::ParseManifest(lwweb::SerializeManifest(proxy_manifest));
   Check(proxy_round_trip.backend_proxy.enabled &&
-            proxy_round_trip.backend_proxy.origin == "http://127.0.0.1:18080",
-        "controlled backend proxy survives manifest round trip");
+            proxy_round_trip.backend_proxy.origin == "http://127.0.0.1:18080" &&
+            proxy_round_trip.external_links.policy == "browser",
+        "backend proxy and external link policy survive manifest round trip");
   auto reserved_proxy_manifest = proxy_manifest;
   reserved_proxy_manifest.backend_proxy.prefix = "/__lw_file__/proxy";
   bool reserved_proxy_rejected = false;
