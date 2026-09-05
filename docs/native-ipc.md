@@ -96,6 +96,12 @@ lw.Web2App.exe pack .\dist .\out\MyApp.exe --ipc `
 `${APP_DATA}` 和 `${APP_CACHE}`。也可以使用绝对路径。通过系统目录选择器得到的
 Session Grant 仅在本次 Runtime 进程内有效，应用退出后自动失效。
 
+Manifest 中配置的固定根目录无需在应用启动时已经存在。Runtime 会保留声明的词法和
+真实路径边界，目录之后被创建即可自动使用，无需重启应用；但如果 pending 根目录后来
+通过符号链接、Junction 或其他重解析机制指向边界之外，访问仍会返回
+`PERMISSION_DENIED`。不存在的授权根或其子路径调用 `fs.exists` 会返回
+`{ "exists": false }`，而 `fs.watch` 仍要求目录已经真实存在。
+
 ## 方法参考
 
 ### 应用和对话框

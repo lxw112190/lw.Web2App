@@ -147,4 +147,52 @@ void RunFilesystemAccessTests() {
   Check(!std::filesystem::exists(fallback_source) &&
             ReadText(fallback_destination) == "new",
         "cross-filesystem move fallback replaces the destination only when requested");
+
+  // A configured root may be absent at startup; its lexical and resolved
+  // boundaries remain bound to the declared location.
+  const auto pending_root = root / "future-root";
+  Check(!std::filesystem::exists(pending_root),
+        "pending-root test starts with a missing directory");
+  lwweb::Manifest pending_manifest = manifest;
+  pending_manifest.ipc.capabilities = {"fs.exists", "fs.list", "fs.mkdir"};
+  pending_manifest.ipc.filesystem_roots = {pending_root.u8string()};
+  lwweb::IpcDispatcher pending_dispatcher(pending_manifest, services);
+  auto pending_exists = pending_dispatcher.Dispatch(
+      {"pending-root", "fs.exists", {{"path", pending_root.u8string()}}});
+  auto pending_child = pending_dispatcher.Dispatch(
+      {"pending-child", "fs.exists",
+       {{"path", (pending_root / "usage.jsonl").u8string()}}});
+  Check(pending_exists.ok && pending_exists.result["exists"] == false &&
+            pending_child.ok && pending_child.result["exists"] == false,
+        "missing configured root and child report exists=false");
+  auto pending_sibling = pending_dispatcher.Dispatch(
+      {"pending-sibling", "fs.exists",
+       {{"path", (root / "future-root-other").u8string()}}});
+  Check(!pending_sibling.ok && pending_sibling.error.code == "PERMISSION_DENIED",
+        "pending root rejects a sibling with a colliding textual prefix");
+  auto pending_mkdir = pending_dispatcher.Dispatch(
+      {"pending-mkdir", "fs.mkdir", {{"path", pending_root.u8string()}}});
+  Check(pending_mkdir.ok && std::filesystem::is_directory(pending_root),
+        "pending root can be created through its pre-authorization");
+  std::ofstream(pending_root / "usage.jsonl") << "{}";
+  auto pending_list = pending_dispatcher.Dispatch(
+      {"pending-list", "fs.list", {{"path", pending_root.u8string()}}});
+  Check(pending_list.ok && pending_list.result["entries"].size() == 1,
+        "pending root becomes usable without rebuilding the dispatcher");
+
+  const auto redirected_root = root / "redirected-root";
+  const auto redirected_target = outside / "redirect-target";
+  Check(!std::filesystem::exists(redirected_root),
+        "redirected-root test starts with a missing directory");
+  lwweb::Manifest redirected_manifest = pending_manifest;
+  redirected_manifest.ipc.filesystem_roots = {redirected_root.u8string()};
+  lwweb::IpcDispatcher redirected_dispatcher(redirected_manifest, services);
+  std::error_code link_error;
+  std::filesystem::create_directory_symlink(outside, redirected_root, link_error);
+  if (!link_error) {
+    auto escaped = redirected_dispatcher.Dispatch(
+        {"redirected", "fs.exists", {{"path", redirected_root.u8string()}}});
+    Check(!escaped.ok && escaped.error.code == "PERMISSION_DENIED",
+          "pending root rejects a symlink redirect outside its policy boundary");
+  }
 }

@@ -98,6 +98,12 @@ lw.Web2App.exe pack .\dist .\out\MyApp.exe --ipc `
 Supported placeholders are `${HOME}`, `${DESKTOP}`, `${DOCUMENTS}`, `${PICTURES}`,
 `${DOWNLOADS}`, `${APP_DATA}`, and `${APP_CACHE}`. Absolute paths are also accepted.
 A directory selected with the system picker is granted only to the current Runtime.
+Configured filesystem roots do not need to exist when the application starts. The Runtime
+keeps both the declared lexical boundary and the resolved policy boundary, so a root created
+later becomes usable without restarting. If a pending root is redirected outside that
+boundary through a symbolic link, junction, or another reparse mechanism, access still
+returns `PERMISSION_DENIED`. `fs.exists` returns `{ "exists": false }` for a missing
+authorized root or child, while `fs.watch` still requires a real directory.
 
 ## Method reference
 

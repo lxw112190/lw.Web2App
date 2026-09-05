@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <cwctype>
 #include <map>
+#include <optional>
+#include <utility>
 
 
 namespace lwweb {
@@ -54,6 +56,39 @@ std::filesystem::path CanonicalDirectory(const std::filesystem::path& path) {
   if (error || !std::filesystem::is_directory(result, error))
     throw IpcException("NOT_FOUND", "Authorized filesystem root is unavailable");
   return result.lexically_normal();
+}
+
+struct ResolvedPrefix {
+  std::filesystem::path existing;
+  std::filesystem::path canonical;
+  std::vector<std::filesystem::path> suffix;
+};
+
+ResolvedPrefix ResolveExistingPrefix(const std::filesystem::path& path) {
+  auto current = path;
+  std::vector<std::filesystem::path> suffix;
+  std::error_code error;
+  while (!current.empty() && !std::filesystem::exists(current, error)) {
+    if (error) throw IpcException("NOT_FOUND", "Path parent is unavailable");
+    const auto component = current.filename();
+    if (!component.empty()) suffix.push_back(component);
+    const auto parent = current.parent_path();
+    if (parent == current) break;
+    current = parent;
+  }
+  if (error || current.empty() || !std::filesystem::exists(current, error))
+    throw IpcException("NOT_FOUND", "Path parent does not exist");
+  auto canonical = std::filesystem::canonical(current, error);
+  if (error) throw IpcException("NOT_FOUND", "Path parent does not exist");
+  std::reverse(suffix.begin(), suffix.end());
+  return {current, canonical.lexically_normal(), std::move(suffix)};
+}
+
+std::filesystem::path ResolveCandidatePath(const std::filesystem::path& path) {
+  const auto prefix = ResolveExistingPrefix(path);
+  auto resolved = prefix.canonical;
+  for (const auto& component : prefix.suffix) resolved /= component;
+  return resolved.lexically_normal();
 }
 
 bool ComponentEqual(const std::filesystem::path& left,
@@ -114,8 +149,15 @@ IpcFilesystemPermissions::IpcFilesystemPermissions(
     if (root.empty() || !root.is_absolute() || UnsafeWindowsNamespace(root))
       throw IpcException("INVALID_ARGUMENT", "Configured filesystem root is invalid");
     std::error_code exists_error;
-    if (!std::filesystem::exists(root, exists_error)) continue;
-    configured_roots_.push_back(CanonicalDirectory(root));
+    if (std::filesystem::exists(root, exists_error)) {
+      if (exists_error) throw IpcException("INVALID_ARGUMENT", "Configured filesystem root is invalid");
+      configured_roots_.push_back(
+          {root.lexically_normal(), CanonicalDirectory(root), false});
+    } else {
+      if (exists_error) throw IpcException("INVALID_ARGUMENT", "Configured filesystem root is invalid");
+      configured_roots_.push_back(
+          {root.lexically_normal(), ResolveCandidatePath(root), true});
+    }
   }
 }
 
@@ -128,13 +170,21 @@ void IpcFilesystemPermissions::AddSessionGrant(
     session_grants_.push_back(canonical);
 }
 
-bool IpcFilesystemPermissions::IsWithinRoots(
-    const std::filesystem::path& canonical) const {
-  for (const auto& root : configured_roots_)
-    if (IsDescendant(canonical, root)) return true;
+bool IpcFilesystemPermissions::IsAuthorized(
+    const std::filesystem::path& requested,
+    const std::filesystem::path& resolved) const {
+  for (const auto& root : configured_roots_) {
+    if (root.pending_at_start) {
+      if (IsDescendant(requested, root.declared_root) &&
+          IsDescendant(resolved, root.policy_root))
+        return true;
+    } else if (IsDescendant(resolved, root.policy_root)) {
+      return true;
+    }
+  }
   std::lock_guard lock(mutex_);
   for (const auto& root : session_grants_)
-    if (IsDescendant(canonical, root)) return true;
+    if (IsDescendant(resolved, root)) return true;
   return false;
 }
 
@@ -150,7 +200,7 @@ std::filesystem::path IpcFilesystemPermissions::RequireExisting(
   std::error_code error;
   const auto canonical = std::filesystem::canonical(requested, error);
   if (error) throw IpcException("NOT_FOUND", "Path does not exist");
-  if (!IsWithinRoots(canonical))
+  if (!IsAuthorized(requested, canonical))
     throw IpcException("PERMISSION_DENIED", "Path is outside authorized roots");
   return requested;
 }
@@ -166,22 +216,16 @@ std::filesystem::path IpcFilesystemPermissions::RequireDestination(
   if (UnsafeWindowsNamespace(requested))
     throw IpcException("INVALID_ARGUMENT", "Windows device and UNC paths are not supported");
   std::error_code error;
-  std::filesystem::path canonical;
-  if (std::filesystem::exists(requested, error)) {
-    canonical = std::filesystem::canonical(requested, error);
-  } else {
-    const auto parent = std::filesystem::canonical(requested.parent_path(), error);
-    if (!error) canonical = (parent / requested.filename()).lexically_normal();
-  }
-  if (error || canonical.empty())
-    throw IpcException("NOT_FOUND", "Destination parent does not exist");
-  if (!IsWithinRoots(canonical))
+  const auto resolved = ResolveCandidatePath(requested);
+  if (!IsAuthorized(requested, resolved))
     throw IpcException("PERMISSION_DENIED", "Destination is outside authorized roots");
   return requested;
 }
 
 std::vector<std::filesystem::path> IpcFilesystemPermissions::Roots() const {
-  auto roots = configured_roots_;
+  std::vector<std::filesystem::path> roots;
+  roots.reserve(configured_roots_.size());
+  for (const auto& root : configured_roots_) roots.push_back(root.policy_root);
   std::lock_guard lock(mutex_);
   roots.insert(roots.end(), session_grants_.begin(), session_grants_.end());
   return roots;
